@@ -96,7 +96,7 @@ Each user stores their **public keys** on the server. These are like padlocks an
 
 ### Step 1 — Clone / open the project
 ```powershell
-cd "C:\Users\koush\OneDrive\Desktop\digital twin city\secure-messaging"
+cd "C:\Users\user\Desktop\secure-messaging
 ```
 
 ### Step 2 — Install dependencies
