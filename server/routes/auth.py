@@ -14,7 +14,7 @@ POST /login
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..db import get_user, register_user
 from ..exceptions import Conflict, InvalidRequest, ResourceNotFound
@@ -23,9 +23,15 @@ from ..middleware import check_rate_limit, create_token
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+# user_id is used as a MongoDB document key and Redis key suffix, so it is
+# bounded. ik_public is a hex-encoded 32-byte X25519 identity key = 64 chars.
+_MAX_USER_ID_LENGTH = 64
+_MAX_IDENTITY_KEY_HEX_LENGTH = 64
+
+
 class RegisterRequest(BaseModel):
-    user_id: str
-    ik_public: str  # hex-encoded X25519 public key
+    user_id: str = Field(max_length=_MAX_USER_ID_LENGTH)
+    ik_public: str = Field(max_length=_MAX_IDENTITY_KEY_HEX_LENGTH)  # hex X25519 key
 
 
 class RegisterResponse(BaseModel):
@@ -34,7 +40,7 @@ class RegisterResponse(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    user_id: str
+    user_id: str = Field(max_length=_MAX_USER_ID_LENGTH)
 
 
 class LoginResponse(BaseModel):

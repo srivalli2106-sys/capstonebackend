@@ -30,9 +30,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _INSECURE_JWT_SECRETS: Final = {
     "change-me-in-production-please",
     "dev-only-change-me",
+    # Value shown in the committed .env.example placeholder.
+    "change-me-to-a-long-random-string",
 }
 
 _MONGODB_PLACEHOLDER_MARKER: Final = "USERNAME:PASSWORD"
+
+# Only symmetric HMAC algorithms make sense for the current shared-secret JWT
+# design (public-key algorithms would need separate key configuration).
+_SUPPORTED_JWT_ALGORITHMS: Final = frozenset({"HS256", "HS384", "HS512"})
 
 
 class Settings(BaseSettings):
@@ -110,10 +116,22 @@ class Settings(BaseSettings):
         default=24, validation_alias="JWT_EXPIRY_HOURS"
     )
 
-    # ------------------------------------------------------------------
+# ------------------------------------------------------------------
     # CORS
     # ------------------------------------------------------------------
     cors_origins: str = Field(default="*", validation_alias="CORS_ORIGINS")
+
+    # ------------------------------------------------------------------
+    # Security / transport
+    # ------------------------------------------------------------------
+    # Comma-separated list of acceptable Host header values. "*" (the
+    # development default) disables host validation entirely; production
+    # must list explicit hosts.
+    allowed_hosts: str = Field(default="*", validation_alias="ALLOWED_HOSTS")
+    # True when this deployment is served over TLS (HTTPS/WSS). Required in
+    # production; gates Strict-Transport-Security so the header is never sent
+    # over plaintext local HTTP.
+    secure_transport: bool = Field(default=False, validation_alias="SECURE_TRANSPORT")
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -126,12 +144,35 @@ class Settings(BaseSettings):
     def cors_origins_list(self) -> list[str]:
         """Return CORS origins as a non-empty list of trimmed values.
 
-        "*" is preserved for development so existing behavior is unchanged
+"*" is preserved for development so existing behavior is unchanged
         unless the caller explicitly configures specific origins.
         """
         origins = [origin.strip() for origin in self.cors_origins.split(",")]
         origins = [origin for origin in origins if origin]
         return origins or ["*"]
+
+    @property
+    def allowed_hosts_list(self) -> list[str]:
+        """Return allowed Host header values as a non-empty trimmed list.
+
+        An unset/empty value resolves to ``["*"]`` (no host validation),
+        matching the development default; production validation rejects it.
+        """
+        hosts = [host.strip() for host in self.allowed_hosts.split(",")]
+        hosts = [host for host in hosts if host]
+        return hosts or ["*"]
+
+    @model_validator(mode="after")
+    def _check_jwt_algorithm(self) -> Settings:
+        # Enforced in every environment: an unsupported algorithm (e.g.
+        # "none") must never be configured, as decode_token is pinned to the
+        # configured algorithm list.
+        if self.jwt_algorithm not in _SUPPORTED_JWT_ALGORITHMS:
+            raise ValueError(
+                "JWT_ALGORITHM must be one of "
+                f"{sorted(_SUPPORTED_JWT_ALGORITHMS)}, got {self.jwt_algorithm!r}."
+            )
+        return self
 
     @model_validator(mode="after")
     def _check_production(self) -> Settings:
@@ -149,12 +190,23 @@ class Settings(BaseSettings):
             )
         if _MONGODB_PLACEHOLDER_MARKER in self.mongodb_uri:
             raise ValueError(
-                "MONGODB_URI must be a real connection string in production."
+"MONGODB_URI must be a real connection string in production."
             )
         if self.cors_origins_list == ["*"]:
             raise ValueError(
                 "CORS_ORIGINS must list specific origins in production "
                 "(the wildcard '*' is not allowed)."
+            )
+        if self.allowed_hosts_list == ["*"]:
+            raise ValueError(
+                "ALLOWED_HOSTS must list specific hosts in production "
+                "(the wildcard '*' is not allowed)."
+            )
+        if not self.secure_transport:
+            raise ValueError(
+                "SECURE_TRANSPORT must be enabled in production: the API must "
+                "be served over HTTPS and WSS (typically behind a "
+                "TLS-terminating proxy)."
             )
         return self
 

@@ -20,7 +20,7 @@ GET /keys/prekeys/{user_id}
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..db import consume_opk, get_key_bundle, get_user, upsert_key_bundle
 from ..exceptions import InvalidRequest, ResourceNotFound
@@ -34,10 +34,18 @@ router = APIRouter(prefix="/keys", tags=["keys"])
 # ---------------------------------------------------------------------------
 
 
+# spk/sig/opk are hex-encoded 32-byte X25519 key material = 64 hex chars;
+# the byte-length checks in the route already enforce the fixed size, and the
+# hex-length cap keeps oversized strings from being parsed in the first place.
+_MAX_KEY_HEX_LENGTH = 64
+
+
 class UploadKeyBundleRequest(BaseModel):
-    spk_public: str   # hex
-    spk_sig: str      # hex
-    opk_public: str | None = None  # hex, nullable
+    spk_public: str = Field(max_length=_MAX_KEY_HEX_LENGTH)  # hex
+    spk_sig: str = Field(max_length=_MAX_KEY_HEX_LENGTH)    # hex
+    opk_public: str | None = Field(
+        default=None, max_length=_MAX_KEY_HEX_LENGTH
+    )  # hex, nullable
 
 
 class KeyBundleResponse(BaseModel):

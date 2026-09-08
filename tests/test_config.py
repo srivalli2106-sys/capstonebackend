@@ -28,6 +28,8 @@ _VALID_PROD = {
     "JWT_SECRET": "s" * 32,
     "MONGODB_URI": "mongodb+srv://realuser:realpass@cluster0.mongodb.net",
     "CORS_ORIGINS": "https://app.example.com",
+    "ALLOWED_HOSTS": "api.example.com",
+    "SECURE_TRANSPORT": "true",
 }
 
 
@@ -53,6 +55,8 @@ def test_dev_defaults(monkeypatch):
     assert s.jwt_secret == "change-me-in-production-please"
     assert s.jwt_expiry_hours == 24
     assert s.cors_origins_list == ["*"]
+    assert s.allowed_hosts_list == ["*"]
+    assert s.secure_transport is False
 
 
 def test_env_validation_aliases(monkeypatch):
@@ -90,6 +94,23 @@ def test_invalid_env_value_rejected(monkeypatch):
             "MONGODB_URI": "mongodb+srv://realuser:realpass@cluster0.mongodb.net",
             "CORS_ORIGINS": "*",
         },
+        {
+            # Valid prod except wildcard ALLOWED_HOSTS.
+            "APP_ENV": "production",
+            "JWT_SECRET": "s" * 32,
+            "MONGODB_URI": "mongodb+srv://realuser:realpass@cluster0.mongodb.net",
+            "CORS_ORIGINS": "https://app.example.com",
+            "ALLOWED_HOSTS": "*",
+            "SECURE_TRANSPORT": "true",
+        },
+        {
+            # Valid prod except missing SECURE_TRANSPORT.
+            "APP_ENV": "production",
+            "JWT_SECRET": "s" * 32,
+            "MONGODB_URI": "mongodb+srv://realuser:realpass@cluster0.mongodb.net",
+            "CORS_ORIGINS": "https://app.example.com",
+            "ALLOWED_HOSTS": "api.example.com",
+        },
     ],
 )
 def test_production_rejects_unsafe_values(monkeypatch, bad):
@@ -101,6 +122,8 @@ def test_valid_production_loads(monkeypatch):
     s = load(monkeypatch, **_VALID_PROD)
     assert s.env == "production"
     assert s.jwt_secret == "s" * 32
+    assert s.allowed_hosts_list == ["api.example.com"]
+    assert s.secure_transport is True
 
 
 def test_cors_origins_list_parsing(monkeypatch):
@@ -114,3 +137,32 @@ def test_cors_origins_list_parsing(monkeypatch):
     ]
     assert load(monkeypatch, CORS_ORIGINS="" ).cors_origins_list == ["*"]
     assert load(monkeypatch, CORS_ORIGINS=" ").cors_origins_list == ["*"]
+
+
+def test_allowed_hosts_list_parsing(monkeypatch):
+    assert load(
+        monkeypatch, ALLOWED_HOSTS="api.example.com, localhost"
+    ).allowed_hosts_list == ["api.example.com", "localhost"]
+    assert load(monkeypatch, ALLOWED_HOSTS="api.example.com, ,localhost").allowed_hosts_list == [
+        "api.example.com",
+        "localhost",
+    ]
+    assert load(monkeypatch, ALLOWED_HOSTS="").allowed_hosts_list == ["*"]
+    assert load(monkeypatch, ALLOWED_HOSTS=" ").allowed_hosts_list == ["*"]
+
+
+def test_secure_transport_parsed_from_env(monkeypatch):
+    assert load(monkeypatch, SECURE_TRANSPORT="true").secure_transport is True
+    assert load(monkeypatch, SECURE_TRANSPORT="false").secure_transport is False
+
+
+@pytest.mark.parametrize("alg", ["HS256", "HS384", "HS512"])
+def test_supported_jwt_algorithms_accepted(monkeypatch, alg):
+    s = load(monkeypatch, JWT_ALGORITHM=alg)
+    assert s.jwt_algorithm == alg
+
+
+@pytest.mark.parametrize("alg", ["none", "RS256", "ES256", ""])
+def test_unsupported_jwt_algorithm_rejected(monkeypatch, alg):
+    with pytest.raises(ValidationError):
+        load(monkeypatch, JWT_ALGORITHM=alg)

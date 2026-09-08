@@ -36,6 +36,12 @@ router = APIRouter(tags=["messages"])
 # In-memory map of user_id -> WebSocket (for single-server deployment)
 _connections: dict[str, WebSocket] = {}
 
+# Input bounds (Phase 5). The whole JSON frame and the recipient id are
+# bounded to keep Redis keys and forwarded frames from growing unboundedly.
+# These are protocol inputs only: message contents are never inspected.
+_MAX_WS_MESSAGE_CHARS = 65536
+_MAX_TO_LENGTH = 64
+
 
 # ---------------------------------------------------------------------------
 # WebSocket endpoint
@@ -78,7 +84,7 @@ async def websocket_endpoint(
     except Exception:
         logger.warning("redis connection registration unavailable for %s", user_id)
 
-    logger.info(f"[WS] {user_id} connected")
+    logger.info("[WS] %s connected", user_id)
 
     # Flush any pending messages that arrived while offline
     try:
@@ -91,7 +97,7 @@ async def websocket_endpoint(
     for msg in pending:
         try:
             await ws.send_text(msg)
-            logger.info(f"[WS] Flushed pending message to {user_id}")
+            logger.info("[WS] Flushed pending message to %s", user_id)
         except Exception:
             try:
                 await enqueue_message(user_id, msg)
@@ -107,9 +113,9 @@ async def websocket_endpoint(
             raw = await ws.receive_text()
             await _handle_message(user_id, raw)
     except WebSocketDisconnect:
-        logger.info(f"[WS] {user_id} disconnected")
+        logger.info("[WS] %s disconnected", user_id)
     except Exception as e:
-        logger.error(f"[WS] Error for {user_id}: {e}")
+        logger.error("[WS] Error for %s: %s", user_id, e)
     finally:
         _connections.pop(user_id, None)
         # Cleanup is best-effort: a Redis failure must not turn an otherwise
@@ -132,6 +138,12 @@ async def websocket_endpoint(
 
 
 async def _handle_message(sender_id: str, raw: str) -> None:
+    # Bound the frame before parsing so oversized input never reaches the
+    # journal/presence/delivery code. Logged without any payload content.
+    if len(raw) > _MAX_WS_MESSAGE_CHARS:
+        logger.warning("dropping oversized websocket message from %s", sender_id)
+        return
+
     try:
         msg = json.loads(raw)
     except json.JSONDecodeError:
@@ -141,6 +153,9 @@ async def _handle_message(sender_id: str, raw: str) -> None:
     data = msg.get("data")
 
     if not recipient_id or not data:
+        return
+    if not isinstance(recipient_id, str) or len(recipient_id) > _MAX_TO_LENGTH:
+        logger.warning("dropping message with invalid recipient from %s", sender_id)
         return
 
     # Build the payload to forward (server never decrypts)
@@ -164,7 +179,7 @@ async def _handle_message(sender_id: str, raw: str) -> None:
         if ws is not None:
             try:
                 await ws.send_text(forward)
-                logger.info(f"[WS] Forwarded message {sender_id} -> {recipient_id}")
+                logger.info("[WS] Forwarded message %s -> %s", sender_id, recipient_id)
                 return
             except Exception:
                 pass
@@ -181,4 +196,4 @@ async def _handle_message(sender_id: str, raw: str) -> None:
             recipient_id,
         )
         return
-    logger.info(f"[WS] Queued message for offline user {recipient_id}")
+    logger.info("[WS] Queued message for offline user %s", recipient_id)

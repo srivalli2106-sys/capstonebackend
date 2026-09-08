@@ -22,6 +22,7 @@ from .logging_config import setup_logging
 from .redis_client import close_redis, ping_redis
 from .request_id import RequestIDMiddleware
 from .routes import auth, keys, messages
+from .security import AllowedHostsMiddleware, SecurityHeadersMiddleware
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -91,8 +92,21 @@ app = FastAPI(
 )
 
 # ---------------------------------------------------------------------------
-# CORS
+# Middleware stack (user middlewares; last registered runs first, so order
+# here controls response processing):
+#
+#   entering  ->  SecurityHeaders -> RequestID -> CORS -> AllowedHosts -> router
+#
+# SecurityHeadersMiddleware and RequestIDMiddleware are registered after
+# AllowedHostsMiddleware (i.e. outside it) so that even host-rejected and
+# CORS-preflight responses are stamped with the security headers and an
+# X-Request-ID, and the rejection error body carries the active request ID.
 # ---------------------------------------------------------------------------
+
+# Host-header validation from settings.allowed_hosts_list, innermost so its
+# rejection passes back through the header-stamping middlewares. "*" (the
+# development/test default) disables validation.
+app.add_middleware(AllowedHostsMiddleware, allowed_hosts=settings.allowed_hosts_list)
 
 app.add_middleware(
     CORSMiddleware,
@@ -105,6 +119,10 @@ app.add_middleware(
 # Configures the root logger (idempotent) and correlates each HTTP request
 # with a request ID that is echoed on the response and included in logs.
 app.add_middleware(RequestIDMiddleware)
+
+# Security headers on every HTTP response. HSTS is only emitted when the
+# deployment is actually served over TLS (settings.secure_transport).
+app.add_middleware(SecurityHeadersMiddleware, hsts_enabled=settings.secure_transport)
 
 # Centralized error handling: every error renders as
 # {"error": {"code", "message", "request_id"}}.
