@@ -12,7 +12,6 @@ Rate limiter:
 
 from __future__ import annotations
 
-import os
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -21,15 +20,16 @@ import jwt
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from .config import settings
 from .redis_client import get_redis
 
 # ---------------------------------------------------------------------------
-# Config
+# Config (from centralized Settings)
 # ---------------------------------------------------------------------------
 
-JWT_SECRET = os.getenv("JWT_SECRET", "change-me-in-production-please")
-JWT_ALGORITHM = "HS256"
-JWT_EXPIRY_HOURS = int(os.getenv("JWT_EXPIRY_HOURS", "24"))
+JWT_SECRET = settings.jwt_secret
+JWT_ALGORITHM = settings.jwt_algorithm
+JWT_EXPIRY_HOURS = settings.jwt_expiry_hours
 
 _bearer = HTTPBearer(auto_error=False)
 

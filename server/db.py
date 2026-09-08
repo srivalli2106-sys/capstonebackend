@@ -10,19 +10,16 @@ Collections:
 
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone
-from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorClient
 
-# MongoDB Atlas connection string
-# Format: mongodb+srv://<user>:<password>@<cluster>.mongodb.net/<database>
-DATABASE_URL = os.getenv(
-    "MONGODB_URI",
-    "mongodb+srv://USERNAME:PASSWORD@cluster0.xxxxx.mongodb.net",
-)
-DATABASE_NAME = os.getenv("MONGODB_DB", "secure_messaging")
+from .config import settings
+
+# MongoDB connection string and database name come from the centralized
+# configuration. Format: mongodb+srv://<user>:<password>@<cluster>.mongodb.net/<database>
+DATABASE_URL = settings.mongodb_uri
+DATABASE_NAME = settings.mongodb_database
 
 _client: AsyncIOMotorClient | None = None
 

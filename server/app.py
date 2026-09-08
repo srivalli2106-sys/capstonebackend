@@ -13,10 +13,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .config import settings
 from .db import init_db
 from .routes import auth, keys, messages
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger(__name__)
 
 
@@ -30,9 +31,9 @@ async def lifespan(application: FastAPI):
 
 
 app = FastAPI(
-    title="Secure Messaging API",
+    title=settings.app_name,
     description="E2E encrypted messaging with Double Ratchet protocol",
-    version="1.0.0",
+    version=settings.app_version,
     lifespan=lifespan,
 )
 
@@ -42,7 +43,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

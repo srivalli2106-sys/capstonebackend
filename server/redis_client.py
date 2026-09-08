@@ -9,13 +9,11 @@ Stores:
 
 from __future__ import annotations
 
-import json
-import os
-from typing import Any
-
 import redis.asyncio as aioredis
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+from .config import settings
+
+REDIS_URL = settings.redis_url
 
 _pool: aioredis.Redis | None = None
 

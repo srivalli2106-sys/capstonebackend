@@ -1,0 +1,36 @@
+# Environment / secrets (never commit real values)
+.env
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Test / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+*.egg
+
+# IDE / editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
