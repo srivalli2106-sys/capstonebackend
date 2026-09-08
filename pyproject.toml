@@ -9,6 +9,11 @@ requires-python = ">=3.10"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "integration: requires MongoDB and Redis; skipped unless RUN_INTEGRATION=1",
+]
 
 [tool.ruff]
 line-length = 88
@@ -16,4 +21,4 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B"]
-ignore = ["E501"]
+ignore = ["E501", "B008"]  # B008: Depends() in defaults is the FastAPI DI idiom

@@ -13,7 +13,7 @@ POST /login
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel
 
 from ..db import get_user, register_user
@@ -50,8 +50,8 @@ async def register(body: RegisterRequest, request: Request):
 
     try:
         ik_bytes = bytes.fromhex(body.ik_public)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="ik_public must be hex")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="ik_public must be hex") from exc
 
     if len(ik_bytes) != 32:
         raise HTTPException(status_code=400, detail="ik_public must be 32 bytes")

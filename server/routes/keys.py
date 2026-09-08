@@ -19,7 +19,7 @@ GET /keys/prekeys/{user_id}
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from ..db import consume_opk, get_key_bundle, get_user, upsert_key_bundle
@@ -75,8 +75,8 @@ async def upload_key_bundle(
     try:
         spk_bytes = bytes.fromhex(body.spk_public)
         sig_bytes = bytes.fromhex(body.spk_sig)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="spk_public and spk_sig must be hex")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="spk_public and spk_sig must be hex") from exc
 
     if len(spk_bytes) != 32:
         raise HTTPException(status_code=400, detail="spk_public must be 32 bytes")
@@ -85,8 +85,8 @@ async def upload_key_bundle(
     if body.opk_public is not None:
         try:
             opk_bytes = bytes.fromhex(body.opk_public)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="opk_public must be hex")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="opk_public must be hex") from exc
         if len(opk_bytes) != 32:
             raise HTTPException(status_code=400, detail="opk_public must be 32 bytes")
 

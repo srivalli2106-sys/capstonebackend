@@ -1,15 +1,21 @@
 # 🔐 Secure Messaging App
 
-**End-to-end encrypted messaging with the Double Ratchet protocol.**
+**End-to-end encrypted messaging backend (FastAPI).**
 
-Everything (messages, keys, files) is encrypted **on your device** before it ever reaches the server. The server only relays opaque encrypted blobs — it can never read your messages.
+Everything (messages, keys, files) is encrypted **on the device** before it
+ever reaches the server. The server only relays opaque encrypted blobs — it
+can never read the message contents.
+
+> ⚠️ This is a learning / demo project. The crypto (`crypto/`, `protocol/`,
+> `client/`) is **not yet implemented**. Do not use it to protect real,
+> sensitive messages until the full protocol is built and audited.
 
 ---
 
 ## ✨ What this does at a glance
 
 ```
-Alice's phone                Server (can't read anything)             Bob's phone
+Alice's phone                Server (can't read anything)              Bob's phone
       │                              │                                     │
       │  1. Register once            │                                     │
       │  (sends public key)          │                                     │
@@ -19,10 +25,8 @@ Alice's phone                Server (can't read anything)             Bob's phon
       │  asks server for Bob's keys  │                                     │
       │ ────────────────────────────►│◄────────────────────────────────────│
       │                              │                                     │
-      │  3. Alice & Bob do a         │                                     │
-      │  secret key exchange (X3DH)  │                                     │
-      │  BOTH now share a secret     │                                     │
-      │  key that only they know     │                                     │
+      │  3. Alice & Bob do a secret  │                                     │
+      │     key exchange (X3DH)      │                                     │
       │                              │                                     │
       │  4. Alice encrypts message   │                                     │
       │  🔒 "hello bob" → gibberish  │                                     │
@@ -34,222 +38,166 @@ Alice's phone                Server (can't read anything)             Bob's phon
 
 ---
 
-## 🗂️ Folder Structure (what each part does)
+## 🗂️ Folder structure
 
 ```
-secure-messaging/
+capstonebackend/
 │
-├── server/               ← The backend (this README focuses here)
-│   ├── app.py            ← The main entry point. Starts the server & wires routes together
-│   ├── db.py             ← Talks to MongoDB Atlas (stores users & their public keys)
-│   ├── middleware.py     ← Security: checks login tokens (JWT) & rate-limits requests
-│   ├── redis_client.py   ← Tracks who's online + queues messages for offline users
-│   └── routes/           ← The actual "brain" — each file handles one type of request
-│       ├── auth.py       ← Registration (one-time only) + login
-│       ├── keys.py       ← Uploading / fetching public key bundles
-│       └── messages.py   ← WebSocket — the real-time message relay
+├── server/                  ← The backend
+│   ├── app.py               ← Entry point; wires routes, CORS, lifespan
+│   ├── config.py            ← Centralized configuration (env / .env, validated)
+│   ├── db.py                ← MongoDB (users + key bundles)
+│   ├── middleware.py        ← JWT auth + rate limiting
+│   ├── redis_client.py      ← Online status + offline message queue
+│   └── routes/
+│       ├── auth.py          ← One-time registration + login
+│       ├── keys.py          ← Key bundle upload / fetch / one-time key
+│       └── messages.py      ← WebSocket relay for encrypted messages
 │
-├── crypto/               ← (future) The encryption math lives here
-├── protocol/             ← (future) The Double Ratchet / X3DH logic
-├── client/               ← (future) The app you'd use to chat
-├── tests/                ← (future) Automated tests
-│
-└── requirements.txt      ← List of Python packages this project needs
+├── tests/                   ← pytest suite (unit + integration)
+├── .github/workflows/       ← CI (ruff, unit tests, integration tests)
+├── requirements.txt         ← Runtime dependencies (pinned)
+├── requirements-dev.txt     ← Test/lint dependencies (pinned)
+├── pyproject.toml           ← Test & lint configuration
+├── .env.example             ← Template for environment variables
+└── README.md
 ```
 
 ---
 
-## 🧠 Backend explained for beginners
+## API endpoints (as implemented)
 
-The backend has **3 jobs**. Here's how each is handled:
+| Method | Path                          | Auth | Description                                   |
+|--------|-------------------------------|------|-----------------------------------------------|
+| GET    | `/health`                     | —    | Liveness probe → `{"status": "ok"}`           |
+| POST   | `/auth/register`              | —    | One-time registration (user_id + identity key)|
+| POST   | `/auth/login`                 | —    | Returns a JWT for authenticated requests      |
+| POST   | `/keys/upload`                | JWT  | Upload signed prekey + one-time prekey        |
+| GET    | `/keys/bundle/{user_id}`      | JWT  | Fetch a user's key bundle (consumes OPK)      |
+| GET    | `/keys/prekeys/{user_id}`     | JWT  | OPK availability status                       |
+| WS     | `/ws?token=...`               | JWT  | Real-time message relay (query-param token)   |
 
-### 1. Accounts (who can use the app)
-- **`POST /auth/register`** — create an account. **One-time only**: once a username exists, you can never register it again. A unique index in MongoDB enforces this.
-- **`POST /auth/login`** — logs you in and gives you a **token** (like a temporary ID card). You must show this token on every other request.
-
-### 2. Keys (the "padlocks" for encryption)
-Each user stores their **public keys** on the server. These are like padlocks anyone can pick up — but only the owner has the matching key to open them.
-- **`POST /keys/upload`** — save your public keys (padlocks) on the server.
-- **`GET /keys/bundle/{user_id}`** — fetch someone's padlocks so you can start a secret chat with them. The server hands them over **once** and then "uses up" the one-time key.
-
-### 3. Messages (the actual chat)
-- **`WS /ws`** — a WebSocket (a live, two-way connection). When you send a message:
-  - If the **recipient is online** → server forwards it instantly.
-  - If the **recipient is offline** → server queues it and delivers when they reconnect.
-
-> ⚠️ **Important:** The server only ever sees **encrypted gibberish**. It never sees your actual message text.
+Interactive docs: **http://localhost:8000/docs** (Swagger UI).
 
 ---
 
-## 🛠️ Prerequisites (install these first)
+## 🛠️ Prerequisites
 
-| Tool | Why | Where to get it |
-|------|-----|-----------------|
-| **Python 3.10+** | Runs the whole backend | https://www.python.org/downloads/ (check **"Add to PATH"** during install) |
-| **MongoDB Atlas** | The cloud database that stores users & keys | https://www.mongodb.com/atlas (free tier is fine) |
-
-> **Optional but recommended:** Redis. Used for online-status & offline message queueing. If you skip it, the app still runs — it just won't queue messages for offline users.
+| Tool | Why | Notes |
+|------|-----|-------|
+| **Python 3.10+** | Runs the backend | On Windows use the `py` launcher (`py -3.11`), or add Python to PATH |
+| **MongoDB Atlas** | Cloud database for users & keys | Free tier is fine |
+| **Redis** | Online status + offline queue | Optional locally; required for offline messaging |
 
 ---
 
-## 🚀 Setup & Run (step by step)
+## 🚀 Setup & run
 
-### Step 1 — Clone / open the project
+### 1. Create and activate the virtual environment
+
 ```powershell
-cd "C:\Users\koush\OneDrive\Desktop\digital twin city\secure-messaging"
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
 ```
 
-### Step 2 — Install dependencies
+### 2. Install dependencies
+
 ```powershell
 pip install -r requirements.txt
 ```
 
-### Step 3 — Set up MongoDB Atlas
-1. Go to https://www.mongodb.com/atlas and create a free cluster
-2. Click **Connect → Drivers → Python**
-3. Copy your connection string. It looks like:
-   ```
-   mongodb+srv://USERNAME:PASSWORD@cluster0.xxxxx.mongodb.net
-   ```
+(For development/tests, also `pip install -r requirements-dev.txt`.)
 
-### Step 4 — Set environment variables
-Tell the backend where your database is (PowerShell):
+### 3. Configure the environment
+
+Copy `.env.example` to `.env` and fill in real values, **or** export the
+variables directly:
+
 ```powershell
 $env:MONGODB_URI="mongodb+srv://USERNAME:PASSWORD@cluster0.xxxxx.mongodb.net"
 $env:MONGODB_DB="secure_messaging"
 ```
 
-> 🔑 **Tip:** Keep your password out of code. Using a `.env` file or environment variables is safer.
+> 🔑 Keep credentials in `.env` (git-ignored), never in source code.
 
-### Step 5 — Start the server
+| Variable             | Default | Purpose |
+|----------------------|---------|---------|
+| `APP_ENV`            | `development` | `development` \| `test` \| `production` |
+| `DEBUG`              | `false` | Debug behavior |
+| `HOST`, `PORT`       | `0.0.0.0`, `8000` | Bind address |
+| `LOG_LEVEL`          | `INFO` | Python logging level |
+| `MONGODB_URI`        | `mongodb://localhost:27017` | MongoDB connection string |
+| `MONGODB_DB`         | `secure_messaging` | Database name |
+| `REDIS_URL`          | `redis://localhost:6379/0` | Redis connection URL |
+| `JWT_SECRET`         | `change-me-in-production-please` | JWT signing secret |
+| `JWT_ALGORITHM`      | `HS256` | JWT signing algorithm |
+| `JWT_EXPIRY_HOURS`   | `24` | Token lifetime in hours |
+| `CORS_ORIGINS`       | `*` | Comma-separated allowed origins |
+
+**Production validation:** when `APP_ENV=production`, the app refuses unsafe
+config — placeholder/short `JWT_SECRET`, placeholder Mongo URIs
+(`mongodb+srv://USERNAME:PASSWORD@…`), and CORS wildcard `*`.
+
+### 4. Start the server
+
 ```powershell
 python -m uvicorn server.app:app --host 0.0.0.0 --port 8000
 ```
 
-You should see:
-```
-INFO:     Uvicorn running on http://0.0.0.0:8000
-INFO:     Application startup complete.
-```
-
-### Step 6 — Open it in your browser
-| URL | What it shows |
-|-----|---------------|
-| **http://localhost:8000/docs** | Interactive API tester (Swagger UI) — try every endpoint here |
-| **http://localhost:8000/redoc** | Alternative, cleaner API docs |
-| **http://localhost:8000/health** | Simple "I'm alive" check → `{"status": "ok"}` |
+Then open http://localhost:8000/docs to try the API.
 
 ---
 
-## 🧪 Try it yourself (in the browser)
+## 🧪 Running the tests
 
-Open **http://localhost:8000/docs**. Here's a full walkthrough:
+Tests are split into **unit** (no infrastructure) and **integration**
+(needs real MongoDB + Redis).
 
-### 1. Register a user
-- Endpoint: `POST /auth/register`
-- Body (replace with anything):
-  ```json
-  {
-    "user_id": "alice",
-    "ik_public": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
-  }
-  ```
-- ✅ Returns `201` → registered
-- 🚫 Try the same `user_id` again → `409 Conflict` (one-time registration works!)
+```powershell
+# Unit tests — no MongoDB/Redis required
+pytest -m "not integration"
 
-> 📝 `ik_public` must be a **32-byte hex string** (exactly 64 hex characters). For quick testing, copy the example above or generate one in Python:
-> ```python
-> import secrets
-> print(secrets.token_hex(32))
-> ```
-
-### 2. Login
-- Endpoint: `POST /auth/login`
-- Body: `{ "user_id": "alice" }`
-- ✅ Returns a `token`. **Copy it** — you'll paste it in the "Authorize" box (padlock button, top-right) for the next steps.
-
-### 3. Upload your keys
-- Endpoint: `POST /keys/upload`
-- Body:
-  ```json
-  {
-    "spk_public": "<64 hex chars>",
-    "spk_sig": "<64 hex chars>",
-    "opk_public": "<64 hex chars>"
-  }
-  ```
-- ✅ Returns `{"status": "ok"}`
-
-### 4. Fetch someone's key bundle
-- Endpoint: `GET /keys/bundle/{user_id}`
-- Replace `{user_id}` with a real username that uploaded keys
-- ✅ Returns their public keys (and consumes their one-time key)
-
----
-
-## 🔌 WebSocket testing (real-time chat)
-
-The `/ws` endpoint is real-time — you can't fully test it from the browser docs. Use a tool like **wscat** or a small script.
-
-Quick test with PowerShell + Python:
-
-```python
-# test_ws.py — send a message over WebSocket
-import asyncio, json
-import websockets
-
-async def main():
-    uri = "ws://localhost:8000/ws?token=YOUR_LOGIN_TOKEN_HERE"
-    async with websockets.connect(uri) as ws:
-        msg = {"to": "bob", "data": "aGVsbG8="}  # base64 of an encrypted blob
-        await ws.send(json.dumps(msg))
-        print("sent:", msg)
-        reply = await ws.recv()
-        print("received:", reply)
-
-asyncio.run(main())
+# Integration tests — requires RUN_INTEGRATION=1 and running MongoDB + Redis
+$env:RUN_INTEGRATION="1"
+pytest -m integration
 ```
 
-Messages sent from the client look like:
-```json
-{
-  "to": "bob",            // who to send to
-  "data": "aGVsbG8="      // the ENCRYPTED payload (base64) — server just relays it
-}
+Integration tests cover the one-time registration flow, login, key-bundle
+upload/fetch with OPK consumption, and the WebSocket relay (online relay +
+offline queueing). GitHub Actions CI (`.github/workflows/ci.yml`) runs the
+full suite — including integration tests — against disposable MongoDB and
+Redis service containers on every push/PR.
+
+Lint with:
+
+```powershell
+ruff check server tests
 ```
 
 ---
 
-## 🔒 Security model (why this is secure)
-
-The server **cannot** read your messages because of how the protocol works:
+## 🔒 Security model
 
 | Property | How it's achieved |
 |----------|-------------------|
-| **One-time registration** | Unique index on `user_id` — you can't re-register or impersonate |
-| **End-to-end encryption** | Messages encrypted with AES-256-GCM before leaving your device |
-| **Forward secrecy** | Double Ratchet — each message uses a fresh key, old keys are deleted forever |
-| **Per-session keys** | Every new chat session does a fresh key exchange — no session replay |
-| **Identity verification** | X3DH with signed prekeys — you prove you are who you say you are |
-| **Message integrity** | If anyone tampers with a message, decryption fails automatically |
+| **One-time registration** | Unique index on `user_id` — cannot re-register or impersonate |
+| **End-to-end encryption** | Messages encrypted before leaving the device (planned) |
+| **Forward secrecy** | Double Ratchet — fresh key per message (planned) |
+| **Per-session keys** | Fresh key exchange per session (planned) |
+| **Identity verification** | X3DH with signed prekeys (planned) |
+| **Message integrity** | Tampering fails decryption (planned) |
+
+The server-side guarantees implemented **today**: JWT auth on protected
+routes, per-IP rate limiting (one-time registration, login, keys), opaque
+relay of message blobs, and strict config validation for production.
 
 ---
 
-## ⚠️ Important security note
+## 🛣️ Roadmap — backend hardening
 
-**This is a learning / demo project.** The encryption logic (`crypto/`, `protocol/`, `client/`) is **not yet implemented** — only the backend exists right now. Do **not** use this to protect real, sensitive messages until the full protocol is built and audited.
-
----
-
-## 🛣️ Roadmap (what's coming)
-
-- [ ] **Phase 1** — Core crypto primitives (X25519, HKDF, AES-GCM)
-- [ ] **Phase 2** — Double Ratchet implementation
-- [ ] **Phase 3** — X3DH handshake
-- [ ] **Phase 4** — Message wire format & session management
-- [ ] **Phase 5** — ✅ Server (this, done)
-- [ ] **Phase 6** — Client app (CLI first, then mobile/desktop UI)
-- [ ] **Phase 7** — End-to-end tests & security benchmarks
+- [x] **Phase 1** — Centralized configuration + project foundation
+- [x] **Phase 2** — Automated test suite + CI + docs
+- [ ] Crypto/service layer, hardening pass, token hygiene, observability
 
 ---
 
@@ -258,33 +206,10 @@ The server **cannot** read your messages because of how the protocol works:
 | Error | Cause | Fix |
 |-------|-------|-----|
 | `'uvicorn' is not recognized` | uvicorn not on PATH | Use `python -m uvicorn ...` instead |
-| `ServerSelectionTimeoutError` | Can't reach Atlas | Check `MONGODB_URI` / password / internet |
-| `pymongo.errors.DuplicateKeyError` | Registering a user that exists | That's expected — one-time registration blocks it |
+| `ServerSelectionTimeoutError` | Can't reach Mongo | Check `MONGODB_URI` / password / internet |
 | `409 Conflict` on register | Username already taken | Pick a different `user_id` |
-| `Missing bearer token` on `/keys/*` | You forgot to authorize | Paste your login token in the 🔒 Authorize button |
-| Can't connect `/ws` | Bad or expired token | Log in again for a fresh token |
-
----
-
-## 📦 Tech Stack
-
-| Layer | Technology |
-|-------|------------|
-| API framework | FastAPI (Python) |
-| Database | MongoDB Atlas (via Motor) |
-| Cache / queues | Redis |
-| Auth | JWT (PyJWT) |
-| Encryption | AES-256-GCM + X25519 (via `cryptography`) |
-| Real-time | WebSockets |
-
----
-
-## 🤝 Want to contribute?
-
-1. Fork the repo
-2. Create a feature branch: `git checkout -b feature/your-feature`
-3. Commit your changes
-4. Push & open a Pull Request
+| `Missing bearer token` on `/keys/*` | Not authorized | Paste your login token in the 🔒 Authorize button |
+| `ValueError: JWT_SECRET must ...` | Production config unsafe | Set a strong `JWT_SECRET`, real Mongo URI, and specific CORS origins |
 
 ---
 

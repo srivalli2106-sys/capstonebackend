@@ -15,19 +15,26 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .db import init_db
+from .logging_config import setup_logging
+from .request_id import RequestIDMiddleware
 from .routes import auth, keys, messages
 
-logging.basicConfig(level=settings.log_level)
+setup_logging()
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    logger.info("Initializing database...")
+    logger.info(
+        "application starting: %s version=%s",
+        settings.app_name,
+        settings.app_version,
+    )
+    logger.info("initializing database connection...")
     await init_db()
-    logger.info("Database ready.")
+    logger.info("database ready.")
     yield
-    logger.info("Shutting down.")
+    logger.info("application shutdown complete.")
 
 
 app = FastAPI(
@@ -48,6 +55,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Configures the root logger (idempotent) and correlates each HTTP request
+# with a request ID that is echoed on the response and included in logs.
+app.add_middleware(RequestIDMiddleware)
 
 # ---------------------------------------------------------------------------
 # Routes

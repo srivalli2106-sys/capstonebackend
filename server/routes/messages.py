@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
@@ -23,7 +22,6 @@ from ..middleware import decode_token
 from ..redis_client import (
     dequeue_all_messages,
     enqueue_message,
-    get_connection,
     is_online,
     register_connection,
     remove_connection,
