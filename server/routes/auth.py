@@ -13,10 +13,11 @@ POST /login
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
 from ..db import get_user, register_user
+from ..exceptions import Conflict, InvalidRequest, ResourceNotFound
 from ..middleware import check_rate_limit, create_token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -46,21 +47,20 @@ async def register(body: RegisterRequest, request: Request):
     await check_rate_limit(request, "register")
 
     if not body.user_id or len(body.user_id) < 3:
-        raise HTTPException(status_code=400, detail="user_id too short")
+        raise InvalidRequest("user_id too short")
 
     try:
         ik_bytes = bytes.fromhex(body.ik_public)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail="ik_public must be hex") from exc
+        raise InvalidRequest("ik_public must be hex") from exc
 
     if len(ik_bytes) != 32:
-        raise HTTPException(status_code=400, detail="ik_public must be 32 bytes")
+        raise InvalidRequest("ik_public must be 32 bytes")
 
     ok = await register_user(body.user_id, ik_bytes)
     if not ok:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"User '{body.user_id}' already registered. Re-registration is not allowed.",
+        raise Conflict(
+            f"User '{body.user_id}' already registered. Re-registration is not allowed."
         )
 
     return RegisterResponse(status="registered", user_id=body.user_id)
@@ -72,7 +72,7 @@ async def login(body: LoginRequest, request: Request):
 
     user = await get_user(body.user_id)
     if user is None:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise ResourceNotFound("User not found")
 
     token = create_token(user["user_id"])
     return LoginResponse(token=token, user_id=user["user_id"])

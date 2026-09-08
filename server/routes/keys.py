@@ -19,10 +19,11 @@ GET /keys/prekeys/{user_id}
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from ..db import consume_opk, get_key_bundle, get_user, upsert_key_bundle
+from ..exceptions import InvalidRequest, ResourceNotFound
 from ..middleware import check_rate_limit, require_auth
 
 router = APIRouter(prefix="/keys", tags=["keys"])
@@ -70,25 +71,25 @@ async def upload_key_bundle(
 
     user = await get_user(user_id)
     if user is None:
-        raise HTTPException(status_code=404, detail="User not found. Register first.")
+        raise ResourceNotFound("User not found. Register first.")
 
     try:
         spk_bytes = bytes.fromhex(body.spk_public)
         sig_bytes = bytes.fromhex(body.spk_sig)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail="spk_public and spk_sig must be hex") from exc
+        raise InvalidRequest("spk_public and spk_sig must be hex") from exc
 
     if len(spk_bytes) != 32:
-        raise HTTPException(status_code=400, detail="spk_public must be 32 bytes")
+        raise InvalidRequest("spk_public must be 32 bytes")
 
     opk_bytes = None
     if body.opk_public is not None:
         try:
             opk_bytes = bytes.fromhex(body.opk_public)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail="opk_public must be hex") from exc
+            raise InvalidRequest("opk_public must be hex") from exc
         if len(opk_bytes) != 32:
-            raise HTTPException(status_code=400, detail="opk_public must be 32 bytes")
+            raise InvalidRequest("opk_public must be 32 bytes")
 
     await upsert_key_bundle(user_id, spk_bytes, sig_bytes, opk_bytes)
     return {"status": "ok", "user_id": user_id}
@@ -104,7 +105,7 @@ async def get_bundle(
 
     bundle = await get_key_bundle(target_user_id)
     if bundle is None:
-        raise HTTPException(status_code=404, detail="Key bundle not found")
+        raise ResourceNotFound("Key bundle not found")
 
     # Consume the OPK (set to NULL)
     await consume_opk(target_user_id)
@@ -131,7 +132,7 @@ async def opk_status(
 
     bundle = await get_key_bundle(target_user_id)
     if bundle is None:
-        raise HTTPException(status_code=404, detail="Key bundle not found")
+        raise ResourceNotFound("Key bundle not found")
 
     return OPKStatusResponse(
         user_id=bundle["user_id"],

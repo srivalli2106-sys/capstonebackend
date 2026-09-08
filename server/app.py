@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .db import init_db
+from .exceptions import install_exception_handlers
 from .logging_config import setup_logging
 from .request_id import RequestIDMiddleware
 from .routes import auth, keys, messages
@@ -59,6 +60,10 @@ app.add_middleware(
 # Configures the root logger (idempotent) and correlates each HTTP request
 # with a request ID that is echoed on the response and included in logs.
 app.add_middleware(RequestIDMiddleware)
+
+# Centralized error handling: every error renders as
+# {"error": {"code", "message", "request_id"}}.
+install_exception_handlers(app)
 
 # ---------------------------------------------------------------------------
 # Routes
