@@ -67,19 +67,39 @@ async def websocket_endpoint(
             pass
 
     _connections[user_id] = ws
-    await set_online(user_id)
-    await register_connection(user_id, user_id)
+    # Redis presence is best-effort: an unavailable Redis must not prevent a
+    # valid user from connecting, so failures are logged and we continue.
+    try:
+        await set_online(user_id)
+    except Exception:
+        logger.warning("redis presence unavailable for %s at connect", user_id)
+    try:
+        await register_connection(user_id, user_id)
+    except Exception:
+        logger.warning("redis connection registration unavailable for %s", user_id)
 
     logger.info(f"[WS] {user_id} connected")
 
     # Flush any pending messages that arrived while offline
-    pending = await dequeue_all_messages(user_id)
+    try:
+        pending = await dequeue_all_messages(user_id)
+    except Exception:
+        logger.warning(
+            "redis unavailable: could not flush queued messages for %s", user_id
+        )
+        pending = []
     for msg in pending:
         try:
             await ws.send_text(msg)
             logger.info(f"[WS] Flushed pending message to {user_id}")
         except Exception:
-            await enqueue_message(user_id, msg)
+            try:
+                await enqueue_message(user_id, msg)
+            except Exception:
+                logger.error(
+                    "redis unavailable: failed to re-queue pending message for %s",
+                    user_id,
+                )
             break
 
     try:
@@ -92,8 +112,18 @@ async def websocket_endpoint(
         logger.error(f"[WS] Error for {user_id}: {e}")
     finally:
         _connections.pop(user_id, None)
-        await set_offline(user_id)
-        await remove_connection(user_id)
+        # Cleanup is best-effort: a Redis failure must not turn an otherwise
+        # clean disconnect into an error or mask its original cause.
+        for label, cleanup in (
+            ("set_offline", set_offline),
+            ("remove_connection", remove_connection),
+        ):
+            try:
+                await cleanup(user_id)
+            except Exception:
+                logger.warning(
+                    "redis unavailable during %s cleanup for %s", label, user_id
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +149,17 @@ async def _handle_message(sender_id: str, raw: str) -> None:
         "data": data,
     })
 
-    if await is_online(recipient_id):
+    # Presence failures degrade gracefully: if we cannot read presence we
+    # treat the recipient as offline and fall through to the queue path.
+    try:
+        online = await is_online(recipient_id)
+    except Exception:
+        online = False
+        logger.warning(
+            "presence lookup failed for %s; treating as offline", recipient_id
+        )
+
+    if online:
         ws = _connections.get(recipient_id)
         if ws is not None:
             try:
@@ -129,6 +169,16 @@ async def _handle_message(sender_id: str, raw: str) -> None:
             except Exception:
                 pass
 
-    # Recipient offline — queue the message
-    await enqueue_message(recipient_id, forward)
+    # Recipient offline — queue the message. If the Redis write fails we
+    # must never claim the message was queued: report it explicitly, stop,
+    # and leave the sender's connection alive.
+    try:
+        await enqueue_message(recipient_id, forward)
+    except Exception:
+        logger.error(
+            "redis unavailable: message from %s to %s was NOT queued",
+            sender_id,
+            recipient_id,
+        )
+        return
     logger.info(f"[WS] Queued message for offline user {recipient_id}")

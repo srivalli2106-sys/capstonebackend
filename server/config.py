@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     port: int = Field(default=8000, validation_alias="PORT")
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
 
-    # ------------------------------------------------------------------
+# ------------------------------------------------------------------
     # MongoDB
     # ------------------------------------------------------------------
     mongodb_uri: str = Field(
@@ -58,12 +58,45 @@ class Settings(BaseSettings):
     mongodb_database: str = Field(
         default="secure_messaging", validation_alias="MONGODB_DB"
     )
+    # Connection/pooling bounds (milliseconds). socketTimeoutMS may be unset,
+    # in which case the driver default (no timeout) applies.
+    mongodb_server_selection_timeout_ms: int = Field(
+        default=5000, validation_alias="MONGODB_SERVER_SELECTION_TIMEOUT_MS", ge=100
+    )
+    mongodb_connect_timeout_ms: int = Field(
+        default=10000, validation_alias="MONGODB_CONNECT_TIMEOUT_MS", ge=100
+    )
+    mongodb_socket_timeout_ms: int | None = Field(
+        default=None, validation_alias="MONGODB_SOCKET_TIMEOUT_MS", ge=100
+    )
+    mongodb_max_pool_size: int = Field(
+        default=50, validation_alias="MONGODB_MAX_POOL_SIZE", ge=1
+    )
+    mongodb_min_pool_size: int = Field(
+        default=0, validation_alias="MONGODB_MIN_POOL_SIZE", ge=0
+    )
+    mongodb_max_idle_time_ms: int = Field(
+        default=300000, validation_alias="MONGODB_MAX_IDLE_TIME_MS", ge=0
+    )
 
     # ------------------------------------------------------------------
     # Redis
     # ------------------------------------------------------------------
     redis_url: str = Field(
         default="redis://localhost:6379/0", validation_alias="REDIS_URL"
+    )
+    # Single reused client; the pool never exceeds this many connections.
+    redis_max_connections: int = Field(
+        default=10, validation_alias="REDIS_MAX_CONNECTIONS", ge=1
+    )
+    redis_socket_connect_timeout: float = Field(
+        default=3.0, validation_alias="REDIS_SOCKET_CONNECT_TIMEOUT", ge=0
+    )
+    redis_socket_timeout: float = Field(
+        default=5.0, validation_alias="REDIS_SOCKET_TIMEOUT", ge=0
+    )
+    redis_health_check_interval: int = Field(
+        default=30, validation_alias="REDIS_HEALTH_CHECK_INTERVAL", ge=1
     )
 
     # ------------------------------------------------------------------

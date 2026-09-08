@@ -28,6 +28,8 @@ import logging
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pymongo.errors import PyMongoError
+from redis.exceptions import RedisError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .request_id import get_current_request_id
@@ -76,6 +78,14 @@ class Conflict(ApplicationError):
     status_code = 409
     code = "conflict"
     message = "Conflict"
+
+
+class DependencyUnavailable(ApplicationError):
+    """A required dependency (MongoDB/Redis) is currently unavailable (HTTP 503)."""
+
+    status_code = 503
+    code = "dependency_unavailable"
+    message = "Dependency unavailable"
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +166,29 @@ async def validation_error_handler(
     return _error_response(422, "validation_error", "Request validation failed")
 
 
+async def dependency_error_handler(
+    request: Request, exc: Exception
+) -> JSONResponse:
+    """Map a driver/network failure to HTTP 503 dependency_unavailable.
+
+    Only the driver exception classes themselves are routed here, so
+    programming errors still reach the generic 500 handler. The client gets
+    a stable, generic message — the underlying driver detail (hosts, retry
+    state, error strings) is never included in the response.
+    """
+    logger.warning(
+        "dependency unavailable (%s): %s %s",
+        type(exc).__name__,
+        request.method,
+        request.url.path,
+    )
+    return _error_response(
+        DependencyUnavailable.status_code,
+        DependencyUnavailable.code,
+        DependencyUnavailable.message,
+    )
+
+
 async def unexpected_exception_handler(
     request: Request, exc: Exception
 ) -> JSONResponse:
@@ -185,5 +218,9 @@ def install_exception_handlers(app: FastAPI) -> None:
     # 404/405s are raised by the Starlette router, so both must be covered.
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_error_handler)
+    # MongoDB/Redis driver failures render as a stable HTTP 503; the generic
+    # Exception handler remains the last resort for everything else.
+    app.add_exception_handler(PyMongoError, dependency_error_handler)
+    app.add_exception_handler(RedisError, dependency_error_handler)
     app.add_exception_handler(Exception, unexpected_exception_handler)
     app.add_exception_handler(500, unexpected_exception_handler)

@@ -13,6 +13,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
 from .config import settings
 
@@ -24,11 +26,44 @@ DATABASE_NAME = settings.mongodb_database
 _client: AsyncIOMotorClient | None = None
 
 
+def _client_options() -> dict:
+    """Explicit connection/pool bounds sourced from the centralized settings.
+
+    socketTimeoutMS stays unset (None) unless configured so long-running
+    reads are not silently killed.
+    """
+    return {
+        "appname": settings.app_name,
+        "serverSelectionTimeoutMS": settings.mongodb_server_selection_timeout_ms,
+        "connectTimeoutMS": settings.mongodb_connect_timeout_ms,
+        "socketTimeoutMS": settings.mongodb_socket_timeout_ms,
+        "maxPoolSize": settings.mongodb_max_pool_size,
+        "minPoolSize": settings.mongodb_min_pool_size,
+        "maxIdleTimeMS": settings.mongodb_max_idle_time_ms,
+    }
+
+
 def get_db():
+    """Return a lazily-created, app-wide DB handle (one shared client/pool)."""
     global _client
     if _client is None:
-        _client = AsyncIOMotorClient(DATABASE_URL)
+        _client = AsyncIOMotorClient(DATABASE_URL, **_client_options())
     return _client[DATABASE_NAME]
+
+
+async def ping_mongo() -> bool:
+    """Verify MongoDB connectivity. Bounded by the server-selection timeout."""
+    db = get_db()
+    await db.command("ping")
+    return True
+
+
+async def close_db() -> None:
+    """Close the shared client so the event loop exits cleanly on shutdown."""
+    global _client
+    if _client is not None:
+        await _client.close()
+        _client = None
 
 
 async def init_db() -> None:
@@ -57,7 +92,9 @@ async def register_user(user_id: str, ik_public: bytes) -> bool:
     try:
         await db["users"].insert_one(doc)
         return True
-    except Exception:
+    except DuplicateKeyError:
+        # Only the unique-index violation means "already registered"; other
+        # driver errors propagate so they surface as dependency failures.
         return False
 
 
@@ -110,17 +147,22 @@ async def get_key_bundle(user_id: str) -> dict | None:
 
 
 async def consume_opk(user_id: str) -> bytes | None:
-    """
-    Return the OPK public key and set it to None (consumed).
-    Returns None if no OPK available.
+    """Return the OPK public key and set it to None (consumed).
+
+    Uses a single atomic find-one-and-update guarded by
+    ``{"opk_public": {"$ne": None}}``: MongoDB serializes the update per
+    document, so concurrent consumers can never receive the same OPK.
+    Returns None if no OPK is currently available.
     """
     db = get_db()
-    bundle = await db["key_bundles"].find_one({"user_id": user_id})
-    if bundle is None or bundle.get("opk_public") is None:
-        return None
-
-    opk = bundle["opk_public"]
-    await db["key_bundles"].update_one(
-        {"user_id": user_id}, {"$set": {"opk_public": None}}
+    bundle = await db["key_bundles"].find_one_and_update(
+        {
+            "user_id": user_id,
+            "opk_public": {"$exists": True, "$ne": None},
+        },
+        {"$set": {"opk_public": None}},
+        return_document=ReturnDocument.BEFORE,
     )
-    return opk
+    if bundle is None:
+        return None
+    return bundle.get("opk_public")

@@ -12,11 +12,14 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from pymongo.errors import PyMongoError
+from redis.exceptions import RedisError
 
 from .config import settings
-from .db import init_db
+from .db import close_db, init_db, ping_mongo
 from .exceptions import install_exception_handlers
 from .logging_config import setup_logging
+from .redis_client import close_redis, ping_redis
 from .request_id import RequestIDMiddleware
 from .routes import auth, keys, messages
 
@@ -31,10 +34,52 @@ async def lifespan(application: FastAPI):
         settings.app_name,
         settings.app_version,
     )
-    logger.info("initializing database connection...")
+
+    # MongoDB is mandatory for normal operation, so verify connectivity up
+    # front (bounded by MONGODB_SERVER_SELECTION_TIMEOUT_MS) and fail fast
+    # with a clear log instead of serving requests against an unhealthy DB.
+    logger.info("checking mongodb connectivity...")
+    try:
+        await ping_mongo()
+    except PyMongoError as exc:
+        logger.error(
+            "mongodb unavailable at startup; application cannot continue.",
+            exc_info=True,
+        )
+        raise RuntimeError("MongoDB unavailable at startup") from exc
+    logger.info("mongodb reachable.")
+
+    logger.info("initializing database indexes...")
     await init_db()
     logger.info("database ready.")
+
+    # Redis only needs a graceful startup: presence/offline-queue degrade
+    # gracefully at runtime, so log a warning and keep serving.
+    try:
+        await ping_redis()
+        logger.info("redis ready.")
+    except RedisError:
+        logger.warning(
+            "redis unavailable at startup; presence and offline-queue "
+            "features are degraded until redis returns."
+        )
+
     yield
+
+    logger.info("application shutting down...")
+    # Close each dependency independently: a failure on one must not skip
+    # the other, and shutdown errors are never allowed to be swallowed
+    # silently (they are logged with a traceback).
+    try:
+        await close_db()
+        logger.info("mongodb connection closed.")
+    except PyMongoError:
+        logger.exception("error closing mongodb connection.")
+    try:
+        await close_redis()
+        logger.info("redis connection closed.")
+    except RedisError:
+        logger.exception("error closing redis connection.")
     logger.info("application shutdown complete.")
 
 
