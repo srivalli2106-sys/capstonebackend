@@ -22,9 +22,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
-from ..db import consume_opk, get_key_bundle, get_user, upsert_key_bundle
-from ..exceptions import InvalidRequest, ResourceNotFound
 from ..middleware import check_rate_limit, require_auth
+from ..services.key_service import key_service
 
 router = APIRouter(prefix="/keys", tags=["keys"])
 
@@ -77,29 +76,9 @@ async def upload_key_bundle(
 
     user_id = auth["user_id"]
 
-    user = await get_user(user_id)
-    if user is None:
-        raise ResourceNotFound("User not found. Register first.")
-
-    try:
-        spk_bytes = bytes.fromhex(body.spk_public)
-        sig_bytes = bytes.fromhex(body.spk_sig)
-    except ValueError as exc:
-        raise InvalidRequest("spk_public and spk_sig must be hex") from exc
-
-    if len(spk_bytes) != 32:
-        raise InvalidRequest("spk_public must be 32 bytes")
-
-    opk_bytes = None
-    if body.opk_public is not None:
-        try:
-            opk_bytes = bytes.fromhex(body.opk_public)
-        except ValueError as exc:
-            raise InvalidRequest("opk_public must be hex") from exc
-        if len(opk_bytes) != 32:
-            raise InvalidRequest("opk_public must be 32 bytes")
-
-    await upsert_key_bundle(user_id, spk_bytes, sig_bytes, opk_bytes)
+    await key_service.upload(
+        user_id, body.spk_public, body.spk_sig, body.opk_public
+    )
     return {"status": "ok", "user_id": user_id}
 
 
@@ -111,23 +90,8 @@ async def get_bundle(
 ):
     await check_rate_limit(request, "keys")
 
-    bundle = await get_key_bundle(target_user_id)
-    if bundle is None:
-        raise ResourceNotFound("Key bundle not found")
-
-    # Consume the OPK (set to NULL)
-    await consume_opk(target_user_id)
-
-    # Re-read after consumption
-    bundle = await get_key_bundle(target_user_id)
-
-    return KeyBundleResponse(
-        user_id=bundle["user_id"],
-        spk_public=bundle["spk_public"].hex(),
-        spk_sig=bundle["spk_sig"].hex(),
-        opk_public=bundle["opk_public"].hex() if bundle.get("opk_public") else None,
-        version=bundle.get("version", 1),
-    )
+    result = await key_service.get_bundle(target_user_id)
+    return KeyBundleResponse(**result)
 
 
 @router.get("/prekeys/{target_user_id}", response_model=OPKStatusResponse)
@@ -138,12 +102,5 @@ async def opk_status(
 ):
     await check_rate_limit(request, "keys")
 
-    bundle = await get_key_bundle(target_user_id)
-    if bundle is None:
-        raise ResourceNotFound("Key bundle not found")
-
-    return OPKStatusResponse(
-        user_id=bundle["user_id"],
-        opk_available=bundle.get("opk_public") is not None,
-        version=bundle.get("version", 1),
-    )
+    result = await key_service.opk_status(target_user_id)
+    return OPKStatusResponse(**result)

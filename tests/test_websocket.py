@@ -60,9 +60,15 @@ def ws_env(monkeypatch):
     ``verify_ws_token`` flow works without valid development JWTs; revocation
     reads return not-revoked. Tests needing genuine JWT verification restore
     the real verifier themselves.
+
+    The route delegates presence/queue work to ``presence_service`` and
+    ``message_service``, which hold the repository singletons by default; so
+    the fixture stubs the singleton *instances* (set_online etc.) and every
+    path to real Redis is inert for the whole test.
     """
     from server import ws_registry
-    from server.routes import messages as m
+    from server.repositories.message_repository import message_repository
+    from server.repositories.presence_repository import presence_repository
     from server.ws_registry import WsRegistry
 
     monkeypatch.setattr(ws_auth, "settings", SimpleNamespace(
@@ -90,16 +96,13 @@ def ws_env(monkeypatch):
     monkeypatch.setattr(ws_auth, "allow_ws_message", _allow)
     monkeypatch.setattr(ws_auth, "verify_access_token", lambda token: dict(_CLAIMS))
     monkeypatch.setattr(ws_auth, "is_token_revoked", _not_revoked)
-    for name in (
-        "set_online",
-        "register_connection",
-        "set_offline",
-        "remove_connection",
-        "enqueue_message",
-    ):
-        monkeypatch.setattr(m, name, _noop)
-    monkeypatch.setattr(m, "dequeue_all_messages", _empty)
-    monkeypatch.setattr(m, "is_online", _online_true)
+    monkeypatch.setattr(presence_repository, "set_online", _noop)
+    monkeypatch.setattr(presence_repository, "register_connection", _noop)
+    monkeypatch.setattr(presence_repository, "set_offline", _noop)
+    monkeypatch.setattr(presence_repository, "remove_connection", _noop)
+    monkeypatch.setattr(presence_repository, "is_online", _online_true)
+    monkeypatch.setattr(message_repository, "enqueue_message", _noop)
+    monkeypatch.setattr(message_repository, "dequeue_all_messages", _empty)
 
 
 def _use_real_jwt_verifier(monkeypatch):
@@ -186,7 +189,7 @@ def test_ws_rejects_revoked_token(client: TestClient, ws_env, monkeypatch):
 
 def test_ws_rejects_when_revocation_check_fails(client: TestClient, ws_env, monkeypatch):
     from server import ws_registry
-    from server.routes import messages as m
+    from server.repositories.presence_repository import presence_repository
 
     async def _boom(jti):
         raise RuntimeError("redis down")
@@ -198,8 +201,8 @@ def test_ws_rejects_when_revocation_check_fails(client: TestClient, ws_env, monk
         raise AssertionError("connection must not be registered on failed auth")
 
     monkeypatch.setattr(ws_auth, "is_token_revoked", _boom)
-    monkeypatch.setattr(m, "set_online", _must_not_set_online)
-    monkeypatch.setattr(m, "register_connection", _must_not_register)
+    monkeypatch.setattr(presence_repository, "set_online", _must_not_set_online)
+    monkeypatch.setattr(presence_repository, "register_connection", _must_not_register)
 
     with pytest.raises(WebSocketDisconnect) as exc:
         with client.websocket_connect("/ws") as ws:
@@ -261,19 +264,20 @@ def test_ws_authenticates_and_relays(client: TestClient, ws_env):
 
 
 def test_ws_flushes_pending_messages_on_connect(client: TestClient, ws_env, monkeypatch):
-    from server.routes import messages as m
+    from server.repositories.message_repository import message_repository
 
     async def _pending(user_id):
         return [json.dumps({"from": "bob", "data": "queued"})]
 
-    monkeypatch.setattr(m, "dequeue_all_messages", _pending)
+    monkeypatch.setattr(message_repository, "dequeue_all_messages", _pending)
     with client.websocket_connect("/ws") as ws:
         ws.send_text(_auth("jwt-abc"))
         assert json.loads(ws.receive_text()) == {"from": "bob", "data": "queued"}
 
 
 def test_ws_queues_message_when_recipient_offline(client: TestClient, ws_env, monkeypatch):
-    from server.routes import messages as m
+    from server.repositories.message_repository import message_repository
+    from server.repositories.presence_repository import presence_repository
 
     queued: list[tuple[str, str]] = []
 
@@ -283,8 +287,8 @@ def test_ws_queues_message_when_recipient_offline(client: TestClient, ws_env, mo
     async def _enqueue(user_id, payload):
         queued.append((user_id, payload))
 
-    monkeypatch.setattr(m, "is_online", _offline)
-    monkeypatch.setattr(m, "enqueue_message", _enqueue)
+    monkeypatch.setattr(presence_repository, "is_online", _offline)
+    monkeypatch.setattr(message_repository, "enqueue_message", _enqueue)
     with client.websocket_connect("/ws") as ws:
         ws.send_text(_auth("jwt-abc"))
         ws.send_text(_msg("bob", "blob-1"))
@@ -296,7 +300,7 @@ def test_ws_queues_message_when_recipient_offline(client: TestClient, ws_env, mo
 
 
 def test_ws_marks_user_online_after_auth(client: TestClient, ws_env, monkeypatch):
-    from server.routes import messages as m
+    from server.repositories.presence_repository import presence_repository
 
     events: list[tuple] = []
 
@@ -306,8 +310,8 @@ def test_ws_marks_user_online_after_auth(client: TestClient, ws_env, monkeypatch
     async def _register(user_id, conn_id):
         events.append(("register", user_id, conn_id))
 
-    monkeypatch.setattr(m, "set_online", _set_online)
-    monkeypatch.setattr(m, "register_connection", _register)
+    monkeypatch.setattr(presence_repository, "set_online", _set_online)
+    monkeypatch.setattr(presence_repository, "register_connection", _register)
 
     with client.websocket_connect("/ws") as ws:
         ws.send_text(_auth("jwt-abc"))
@@ -377,14 +381,14 @@ def test_ws_takeover_does_not_clear_presence_of_replacement(
     client: TestClient, ws_env, monkeypatch
 ):
     from server import ws_registry
-    from server.routes import messages as m
+    from server.repositories.presence_repository import presence_repository
 
     offline: list[str] = []
 
     async def _set_offline(user_id):
         offline.append(user_id)
 
-    monkeypatch.setattr(m, "set_offline", _set_offline)
+    monkeypatch.setattr(presence_repository, "set_offline", _set_offline)
 
     old_cm = client.websocket_connect("/ws")
     old = old_cm.__enter__()

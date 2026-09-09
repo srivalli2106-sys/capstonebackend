@@ -14,7 +14,8 @@ from uuid import uuid4
 
 import pytest
 
-from server.db import consume_opk, get_db
+from server.db import get_db
+from server.repositories.key_repository import key_repository
 
 pytestmark = pytest.mark.integration
 
@@ -34,7 +35,7 @@ async def test_concurrent_opk_consumption_is_atomic():
         }
     )
 
-    results = await asyncio.gather(*[consume_opk(uid) for _ in range(8)])
+    results = await asyncio.gather(*[key_repository.consume_opk(uid) for _ in range(8)])
 
     consumed = [r for r in results if r is not None]
     assert len(consumed) == 1

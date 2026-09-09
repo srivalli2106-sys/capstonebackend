@@ -1,14 +1,15 @@
 """Redis client tests using fakes (no running Redis required).
 
-Covers the Phase 4 hardening:
+Covers the connection-layer contract of :mod:`server.redis_client`:
 * a single reused client built with bounded pooling/timeouts from settings
 * ping for the startup connectivity check
 * clean pool close on shutdown (and a safe no-op before first use)
+
+Presence/queue persistence (online:/conn:/pending: keys) is covered in
+:mod:`tests.test_repositories`.
 """
 
 from __future__ import annotations
-
-import pytest
 
 from server import redis_client as rc_module
 from server.redis_client import close_redis, get_redis, ping_redis
@@ -77,32 +78,3 @@ async def test_close_redis_closes_and_resets_pool(monkeypatch):
 async def test_close_redis_is_noop_when_never_initialized(monkeypatch):
     monkeypatch.setattr(rc_module, "_pool", None)
     await close_redis()  # must not raise
-
-
-class _RecordingRedis(FakeRedisClient):
-    def __init__(self):
-        super().__init__()
-        self.sets: list[tuple] = []
-
-    async def set(self, key, value, **kwargs):
-        self.sets.append((key, value, kwargs))
-
-
-@pytest.mark.parametrize(
-    "fn,key,value",
-    [
-        (rc_module.set_online, "online:alice", "1"),
-        (rc_module.register_connection, "conn:alice", "c1"),
-    ],
-)
-async def test_presence_keys_use_configured_ttl(monkeypatch, fn, key, value):
-    fake = _RecordingRedis()
-    monkeypatch.setattr(rc_module, "_pool", fake)
-    if fn is rc_module.register_connection:
-        await fn("alice", "c1")
-    else:
-        await fn("alice")
-    stored_key, stored_value, opts = fake.sets[0]
-    assert stored_key == key
-    assert stored_value == value
-    assert opts["ex"] == rc_module.settings.ws_presence_ttl_seconds

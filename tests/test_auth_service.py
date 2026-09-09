@@ -70,7 +70,7 @@ def _patch_db(monkeypatch, user: dict | None) -> None:
     async def _get_user(user_id: str):
         return user
 
-    monkeypatch.setattr(auth_service.db, "get_user", _get_user)
+    monkeypatch.setattr(auth_service.user_repository, "get_user", _get_user)
 
 
 # ---------------------------------------------------------------------------

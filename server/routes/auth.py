@@ -33,9 +33,9 @@ from pydantic import BaseModel, Field
 
 from .. import auth_service
 from ..config import settings
-from ..db import register_user
-from ..exceptions import Conflict, Forbidden, InvalidRequest
+from ..exceptions import Forbidden
 from ..middleware import check_rate_limit
+from ..services.user_service import user_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -99,23 +99,7 @@ class LogoutResponse(BaseModel):
 async def register(body: RegisterRequest, request: Request):
     await check_rate_limit(request, "register")
 
-    if not body.user_id or len(body.user_id) < 3:
-        raise InvalidRequest("user_id too short")
-
-    try:
-        ik_bytes = bytes.fromhex(body.ik_public)
-    except ValueError as exc:
-        raise InvalidRequest("ik_public must be hex") from exc
-
-    if len(ik_bytes) != 32:
-        raise InvalidRequest("ik_public must be 32 bytes")
-
-    ok = await register_user(body.user_id, ik_bytes)
-    if not ok:
-        raise Conflict(
-            f"User '{body.user_id}' already registered. Re-registration is not allowed."
-        )
-
+    await user_service.register(body.user_id, body.ik_public)
     return RegisterResponse(status="registered", user_id=body.user_id)
 
 

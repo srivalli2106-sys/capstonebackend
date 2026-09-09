@@ -1,10 +1,16 @@
 """
-redis_client.py — Redis connection and helpers.
+redis_client.py — Redis connection lifecycle and low-level helpers.
 
 Stores:
   online:{user_id}   — bool, whether user is currently connected
   pending:{user_id}  — list of queued messages for offline users
   sessions:{jwt_id}  — session metadata
+
+All presence/queue read-write persistence lives in the repositories layer
+(:mod:`server.repositories.presence_repository`,
+:mod:`server.repositories.message_repository`); this module owns only the
+shared pool, its bounds, health checks, and shutdown, plus the three
+low-level session key helpers used nowhere else today.
 """
 
 from __future__ import annotations
@@ -47,71 +53,7 @@ async def close_redis() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Online status
-# ---------------------------------------------------------------------------
-
-
-async def set_online(user_id: str) -> None:
-    r = await get_redis()
-    await r.set(f"online:{user_id}", "1", ex=settings.ws_presence_ttl_seconds)
-
-
-async def is_online(user_id: str) -> bool:
-    r = await get_redis()
-    return await r.exists(f"online:{user_id}") > 0
-
-
-async def set_offline(user_id: str) -> None:
-    r = await get_redis()
-    await r.delete(f"online:{user_id}")
-
-
-# ---------------------------------------------------------------------------
-# Pending message queue (for offline users)
-# ---------------------------------------------------------------------------
-
-
-async def enqueue_message(user_id: str, payload: str) -> None:
-    r = await get_redis()
-    await r.rpush(f"pending:{user_id}", payload)
-
-
-async def dequeue_all_messages(user_id: str) -> list[str]:
-    r = await get_redis()
-    key = f"pending:{user_id}"
-    msgs: list[str] = []
-    while True:
-        item = await r.lpop(key)
-        if item is None:
-            break
-        msgs.append(item)
-    return msgs
-
-
-# ---------------------------------------------------------------------------
-# Active connections (user_id -> websocket connection id)
-# ---------------------------------------------------------------------------
-
-
-async def register_connection(user_id: str, connection_id: str) -> None:
-    r = await get_redis()
-    await r.set(
-        f"conn:{user_id}", connection_id, ex=settings.ws_presence_ttl_seconds
-    )
-
-
-async def get_connection(user_id: str) -> str | None:
-    r = await get_redis()
-    return await r.get(f"conn:{user_id}")
-
-
-async def remove_connection(user_id: str) -> None:
-    r = await get_redis()
-    await r.delete(f"conn:{user_id}")
-
-
-# ---------------------------------------------------------------------------
-# Session tracking
+# Session tracking (low-level; no current caller)
 # ---------------------------------------------------------------------------
 
 

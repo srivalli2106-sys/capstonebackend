@@ -27,10 +27,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from . import auth_store, db
+from . import auth_store
 from .config import settings
 from .exceptions import ResourceNotFound
 from .jwt_auth import create_access_token, verify_access_token
+from .repositories.user_repository import user_repository
 
 # One generic message for every failed verification; never surfaces whether a
 # user is unknown, a challenge is missing/replayed/expired, or the signature
@@ -53,7 +54,7 @@ _bearer = HTTPBearer(auto_error=False)
 
 async def create_challenge(user_id: str) -> str:
     """Validate the user exists and issue a short-lived nonce challenge."""
-    user = await db.get_user(user_id)
+    user = await user_repository.get_user(user_id)
     if user is None:
         raise ResourceNotFound("User not found")
     return await auth_store.issue_challenge(
@@ -68,7 +69,7 @@ async def verify_credentials(user_id: str, nonce_hex: str, signature_hex: str) -
     nonce against the stored identity public key. Returns a signed access
     token. Any failure raises 401 with the generic message.
     """
-    user = await db.get_user(user_id)
+    user = await user_repository.get_user(user_id)
     if user is None:
         raise HTTPException(status_code=401, detail=_AUTH_FAILED)
 
@@ -101,7 +102,7 @@ async def development_login(user_id: str) -> str:
     proof-of-possession dance. The route layer refuses to call this when
     the deployment environment is production.
     """
-    user = await db.get_user(user_id)
+    user = await user_repository.get_user(user_id)
     if user is None:
         raise ResourceNotFound("User not found")
     return create_access_token(user_id)

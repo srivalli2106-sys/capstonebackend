@@ -61,7 +61,9 @@ def _patch_env(monkeypatch, user: dict | None, fake: FakeRedis) -> None:
         return fake
 
     monkeypatch.setattr("server.routes.auth.check_rate_limit", _no_rate_limit)
-    monkeypatch.setattr("server.db.get_user", _get_user)
+    monkeypatch.setattr(
+        "server.repositories.user_repository.user_repository.get_user", _get_user
+    )
     monkeypatch.setattr("server.auth_store.get_redis", _get_redis)
 
 
@@ -280,7 +282,10 @@ def test_auth_endpoints_apply_rate_limits(client, monkeypatch):
         recorded.append(category)
 
     monkeypatch.setattr("server.routes.auth.check_rate_limit", _record)
-    monkeypatch.setattr("server.db.get_user", _get_user_of(user))
+    monkeypatch.setattr(
+        "server.repositories.user_repository.user_repository.get_user",
+        _get_user_of(user),
+    )
 
     async def _get_redis():
         return fake

@@ -18,8 +18,8 @@ from fastapi.testclient import TestClient
 
 from server.middleware import create_token, decode_token
 from server.request_id import RequestIDMiddleware
-from server.routes.messages import _MAX_WS_MESSAGE_CHARS, _handle_message
 from server.security import AllowedHostsMiddleware, SecurityHeadersMiddleware
+from server.services.message_service import MAX_WS_MESSAGE_CHARS, message_service
 
 # ---------------------------------------------------------------------------
 # Mini apps mirroring the app's middleware wiring
@@ -252,9 +252,11 @@ async def test_oversized_ws_frame_dropped(monkeypatch, caplog):
     async def fail_redis(**kwargs):
         raise AssertionError("redis must not be touched for oversized frames")
 
-    monkeypatch.setattr("server.routes.messages.is_online", fail_redis)
-    with caplog.at_level(logging.WARNING, logger="server.routes.messages"):
-        await _handle_message("alice", "x" * (_MAX_WS_MESSAGE_CHARS + 1))
+    monkeypatch.setattr(
+        "server.services.message_service.presence_repository.is_online", fail_redis
+    )
+    with caplog.at_level(logging.WARNING, logger="server.services.message_service"):
+        await message_service.handle_message("alice", "x" * (MAX_WS_MESSAGE_CHARS + 1))
     assert "dropping oversized websocket message" in caplog.text
     assert "alice" in caplog.text
     assert "x" * 100 not in caplog.text  # payload content never logged
@@ -265,10 +267,12 @@ async def test_ws_frame_invalid_recipient_dropped(monkeypatch, caplog):
     async def fail_redis(**kwargs):
         raise AssertionError("redis must not be touched for invalid recipients")
 
-    monkeypatch.setattr("server.routes.messages.is_online", fail_redis)
+    monkeypatch.setattr(
+        "server.services.message_service.presence_repository.is_online", fail_redis
+    )
     raw = json.dumps({"to": "r" * 65, "data": "not-an-encrypted-blob"})
-    with caplog.at_level(logging.WARNING, logger="server.routes.messages"):
-        await _handle_message("alice", raw)
+    with caplog.at_level(logging.WARNING, logger="server.services.message_service"):
+        await message_service.handle_message("alice", raw)
     assert "invalid recipient" in caplog.text
     assert "not-an-encrypted-blob" not in caplog.text
 
