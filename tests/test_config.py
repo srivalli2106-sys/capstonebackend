@@ -166,3 +166,23 @@ def test_supported_jwt_algorithms_accepted(monkeypatch, alg):
 def test_unsupported_jwt_algorithm_rejected(monkeypatch, alg):
     with pytest.raises(ValidationError):
         load(monkeypatch, JWT_ALGORITHM=alg)
+
+
+def test_jwt_issuer_defaults_and_parses(monkeypatch):
+    assert load(monkeypatch).jwt_issuer == "secure-messaging-api"
+    assert load(monkeypatch, JWT_ISSUER="custom-iss").jwt_issuer == "custom-iss"
+
+
+def test_empty_jwt_issuer_rejected(monkeypatch):
+    with pytest.raises(ValidationError):
+        load(monkeypatch, JWT_ISSUER="  ")
+
+
+def test_auth_challenge_ttl_defaults_and_parses(monkeypatch):
+    assert load(monkeypatch).auth_challenge_ttl_seconds == 120
+    assert load(monkeypatch, AUTH_CHALLENGE_TTL_SECONDS="60").auth_challenge_ttl_seconds == 60
+
+
+def test_auth_challenge_ttl_minimum_enforced(monkeypatch):
+    with pytest.raises(ValidationError):
+        load(monkeypatch, AUTH_CHALLENGE_TTL_SECONDS="1")

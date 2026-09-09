@@ -54,6 +54,9 @@ def _request() -> Request:
     [
         ("register", (1, 3600)),
         ("login", (10, 60)),
+        ("challenge", (10, 60)),
+        ("verify", (20, 60)),
+        ("logout", (30, 60)),
         ("keys", (30, 60)),
         ("general", (100, 60)),
         ("unknown-category", (100, 60)),  # falls back to "general"

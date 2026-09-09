@@ -1,73 +1,53 @@
 """
-middleware.py — JWT authentication and rate limiting.
+middleware.py — HTTP auth utilities (compat surface) and rate limiting.
 
-JWT:
-  - Tokens carry {user_id, iat, exp}
-  - Verified on protected endpoints and WebSocket upgrade
+Phase 6 moved token creation/verification to :mod:`server.jwt_auth` and the
+authenticated dependency (with revocation, fail-closed) to
+:mod:`server.auth_service`. This module keeps the original public names so
+existing consumers keep working:
 
-Rate limiter:
-  - Per-IP sliding window using Redis
-  - Configurable limits per endpoint category
+  * ``create_token`` / ``decode_token`` — used by the WebSocket handshake
+    (Phase 7 scope) and pinned by legacy JWT tests.
+  * ``require_auth`` — centralized dependency for protected HTTP routes.
+  * ``check_rate_limit`` / ``RATE_LIMITS`` — Redis-backed sliding window.
+
+``decode_token`` intentionally does NOT check revocation: the WebSocket
+handshake calls it directly and revocation is checked by ``require_auth`` for
+HTTP routes. The WebSocket authentication design is out of Phase 6 scope.
 """
 
 from __future__ import annotations
 
 import time
-from datetime import datetime, timedelta, timezone
 
-import jwt
-from fastapi import Depends, HTTPException, Request, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import HTTPException, Request, status
 
-from .config import settings
+from .auth_service import require_auth  # noqa: F401 - re-exported for routes
+from .jwt_auth import (  # noqa: F401 - re-exported for tests/consumers
+    JWT_ALGORITHM,
+    JWT_EXPIRY_HOURS,
+    JWT_ISSUER,
+    JWT_SECRET,
+    create_access_token,
+    verify_access_token,
+)
 from .redis_client import get_redis
-
-# ---------------------------------------------------------------------------
-# Config (from centralized Settings)
-# ---------------------------------------------------------------------------
-
-JWT_SECRET = settings.jwt_secret
-JWT_ALGORITHM = settings.jwt_algorithm
-JWT_EXPIRY_HOURS = settings.jwt_expiry_hours
-
-_bearer = HTTPBearer(auto_error=False)
-
-
-# ---------------------------------------------------------------------------
-# JWT helpers
-# ---------------------------------------------------------------------------
 
 
 def create_token(user_id: str) -> str:
-    now = datetime.now(timezone.utc)
-    payload = {
-        "user_id": user_id,
-        "iat": now,
-        "exp": now + timedelta(hours=JWT_EXPIRY_HOURS),
-    }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    """Create a signed access token (see server.jwt_auth.create_access_token)."""
+    return create_access_token(user_id)
 
 
 def decode_token(token: str) -> dict:
-    try:
-        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-    except jwt.ExpiredSignatureError as exc:
-        raise HTTPException(status_code=401, detail="Token expired") from exc
-    except jwt.InvalidTokenError as exc:
-        raise HTTPException(status_code=401, detail="Invalid token") from exc
+    """Decode and fully validate a token: signature, algorithm, issuer,
+    expiry, and required claims.
 
-
-# ---------------------------------------------------------------------------
-# FastAPI dependency: require valid JWT
-# ---------------------------------------------------------------------------
-
-
-async def require_auth(
-    creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
-) -> dict:
-    if creds is None:
-        raise HTTPException(status_code=401, detail="Missing bearer token")
-    return decode_token(creds.credentials)
+    NOTE: revocation is intentionally not checked here (WebSocket handshake
+    caller). Protected HTTP routes use ``require_auth``, which checks
+    revocation and fails closed on Redis errors.
+    """
+    return verify_access_token(token)
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +57,9 @@ async def require_auth(
 RATE_LIMITS: dict[str, tuple[int, int]] = {
     "register": (1, 3600),       # 1 request per hour per IP
     "login": (10, 60),           # 10 requests per minute
+    "challenge": (10, 60),       # challenge requests per minute
+    "verify": (20, 60),          # verification attempts per minute
+    "logout": (30, 60),          # logout requests per minute
     "keys": (30, 60),            # 30 requests per minute
     "general": (100, 60),        # 100 requests per minute
 }

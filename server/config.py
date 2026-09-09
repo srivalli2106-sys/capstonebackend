@@ -115,6 +115,20 @@ class Settings(BaseSettings):
     jwt_expiry_hours: int = Field(
         default=24, validation_alias="JWT_EXPIRY_HOURS"
     )
+    # Issuer carried in every issued token and enforced on verification.
+    jwt_issuer: str = Field(
+        default="secure-messaging-api", validation_alias="JWT_ISSUER"
+    )
+
+    # ------------------------------------------------------------------
+    # Authentication (proof of possession)
+    # ------------------------------------------------------------------
+    # Lifetime of a challenge issued by POST /auth/challenge before the
+    # client must complete POST /auth/verify. Short by design: a stolen
+    # challenge is only usable for this window.
+    auth_challenge_ttl_seconds: int = Field(
+        default=120, validation_alias="AUTH_CHALLENGE_TTL_SECONDS", ge=5
+    )
 
 # ------------------------------------------------------------------
     # CORS
@@ -165,13 +179,15 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _check_jwt_algorithm(self) -> Settings:
         # Enforced in every environment: an unsupported algorithm (e.g.
-        # "none") must never be configured, as decode_token is pinned to the
+        # "none") must never be configured, as verification is pinned to the
         # configured algorithm list.
         if self.jwt_algorithm not in _SUPPORTED_JWT_ALGORITHMS:
             raise ValueError(
                 "JWT_ALGORITHM must be one of "
                 f"{sorted(_SUPPORTED_JWT_ALGORITHMS)}, got {self.jwt_algorithm!r}."
             )
+        if not self.jwt_issuer.strip():
+            raise ValueError("JWT_ISSUER must not be empty.")
         return self
 
     @model_validator(mode="after")

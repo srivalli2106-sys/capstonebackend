@@ -223,9 +223,19 @@ def test_login_user_id_over_limit_rejected(client):
     assert resp.status_code == 422
 
 
-def test_key_bundle_fields_over_limit_rejected(client):
+def test_key_bundle_fields_over_limit_rejected(client, monkeypatch):
     token = create_token("carol")
     headers = {"Authorization": f"Bearer {token}"}
+
+    # require_auth checks revocation (fail closed); neutralize it here so
+    # request-body validation (422) is what we assert on.
+    async def _not_revoked(jti: str) -> bool:
+        return False
+
+    monkeypatch.setattr(
+        "server.auth_service.auth_store.is_token_revoked", _not_revoked
+    )
+
     for field in ("spk_public", "spk_sig", "opk_public"):
         body = {"spk_public": "cd" * 32, "spk_sig": "ef" * 32, field: "ab" * 65}
         resp = client.post("/keys/upload", json=body, headers=headers)

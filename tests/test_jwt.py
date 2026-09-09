@@ -9,12 +9,25 @@ import pytest
 from fastapi import HTTPException
 
 from server.config import settings
-from server.middleware import JWT_ALGORITHM, JWT_SECRET, create_token, decode_token
+from server.middleware import (
+    JWT_ALGORITHM,
+    JWT_ISSUER,
+    JWT_SECRET,
+    create_token,
+    decode_token,
+)
 
 
 def _past_token() -> str:
     now = datetime.now(timezone.utc)
-    payload = {"user_id": "alice", "iat": now - timedelta(days=2), "exp": now - timedelta(hours=1)}
+    payload = {
+        "user_id": "alice",
+        "sub": "alice",
+        "iss": JWT_ISSUER,
+        "iat": int((now - timedelta(days=2)).timestamp()),
+        "exp": int((now - timedelta(hours=1)).timestamp()),
+        "jti": "token-id-old",
+    }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 

@@ -72,6 +72,14 @@ class ResourceNotFound(ApplicationError):
     message = "Not found"
 
 
+class Forbidden(ApplicationError):
+    """The caller is not allowed to perform this action (HTTP 403)."""
+
+    status_code = 403
+    code = "forbidden"
+    message = "Forbidden"
+
+
 class Conflict(ApplicationError):
     """The request conflicts with the current server state (HTTP 409)."""
 

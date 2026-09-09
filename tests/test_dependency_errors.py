@@ -65,7 +65,7 @@ async def test_mongo_failure_surfaces_as_503_through_app(client, monkeypatch):
         return None
 
     monkeypatch.setattr(auth_module, "check_rate_limit", _no_rate_limit)
-    monkeypatch.setattr(auth_module, "get_user", _boom)
+    monkeypatch.setattr("server.db.get_user", _boom)
 
     resp = client.post("/auth/login", json={"user_id": "alice"})
     assert resp.status_code == 503
