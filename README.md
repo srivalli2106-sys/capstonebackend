@@ -75,7 +75,7 @@ capstonebackend/
 | POST   | `/keys/upload`                | JWT  | Upload signed prekey + one-time prekey        |
 | GET    | `/keys/bundle/{user_id}`      | JWT  | Fetch a user's key bundle (consumes OPK)      |
 | GET    | `/keys/prekeys/{user_id}`     | JWT  | OPK availability status                       |
-| WS     | `/ws?token=...`               | JWT  | Real-time message relay (query-param token)   |
+| WS     | `/ws`                        | JWT  | Real-time message relay (first-frame `{"type":"auth","token":"..."}`) |
 
 Interactive docs: **http://localhost:8000/docs** (Swagger UI).
 

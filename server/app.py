@@ -7,6 +7,7 @@ Run with: uvicorn server.app:app --host 0.0.0.0 --port 8000
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -23,6 +24,8 @@ from .redis_client import close_redis, ping_redis
 from .request_id import RequestIDMiddleware
 from .routes import auth, keys, messages
 from .security import AllowedHostsMiddleware, SecurityHeadersMiddleware
+from .ws_auth import REASON_GOING_AWAY, WS_GOING_AWAY
+from .ws_registry import registry
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -68,6 +71,11 @@ async def lifespan(application: FastAPI):
     yield
 
     logger.info("application shutting down...")
+    # Close every live WebSocket first (1001) so each handler's finally block
+    # runs its Redis cleanup before the pool is torn down below. A short
+    # settle window lets those teardown coroutines finish their work.
+    await registry.close_all(code=WS_GOING_AWAY, reason=REASON_GOING_AWAY)
+    await asyncio.sleep(0.05)
     # Close each dependency independently: a failure on one must not skip
     # the other, and shutdown errors are never allowed to be swallowed
     # silently (they are logged with a traceback).

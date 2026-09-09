@@ -20,6 +20,19 @@ def _raw(to: str, data: str) -> str:
     return json.dumps({"to": to, "data": data})
 
 
+class _ConnStub:
+    def __init__(self, websocket):
+        self.websocket = websocket
+
+
+class _RegistryStub:
+    def __init__(self, conns=None):
+        self._conns = conns or {}
+
+    def get(self, user_id):
+        return self._conns.get(user_id)
+
+
 async def test_presence_failure_falls_back_to_queue(monkeypatch):
     queued: list[tuple[str, str]] = []
 
@@ -31,7 +44,6 @@ async def test_presence_failure_falls_back_to_queue(monkeypatch):
 
     monkeypatch.setattr(m, "is_online", _is_online)
     monkeypatch.setattr(m, "enqueue_message", _enqueue)
-    monkeypatch.setattr(m, "_connections", {})
 
     await m._handle_message("alice", _raw("carol", "blob"))
 
@@ -47,7 +59,6 @@ async def test_queue_failure_is_reported_and_never_claimed(monkeypatch, caplog):
 
     monkeypatch.setattr(m, "is_online", _is_online)
     monkeypatch.setattr(m, "enqueue_message", _enqueue)
-    monkeypatch.setattr(m, "_connections", {})
 
     with caplog.at_level(logging.INFO, logger="server.routes.messages"):
         await m._handle_message("alice", _raw("carol", "blob"))  # must not raise
@@ -72,9 +83,13 @@ async def test_online_recipient_gets_forwarded_without_queueing(monkeypatch):
         async def send_text(self, payload):
             sent["payload"] = payload
 
+    from server import ws_registry
+
     monkeypatch.setattr(m, "is_online", _is_online)
     monkeypatch.setattr(m, "enqueue_message", _enqueue)
-    monkeypatch.setattr(m, "_connections", {"carol": FakeWS()})
+    monkeypatch.setattr(
+        ws_registry, "registry", _RegistryStub({"carol": _ConnStub(FakeWS())})
+    )
 
     await m._handle_message("alice", _raw("carol", "blob"))
 
@@ -94,9 +109,13 @@ async def test_forward_send_failure_falls_back_to_queue(monkeypatch):
         async def send_text(self, payload):
             raise RuntimeError("ws closed")
 
+    from server import ws_registry
+
     monkeypatch.setattr(m, "is_online", _is_online)
     monkeypatch.setattr(m, "enqueue_message", _enqueue)
-    monkeypatch.setattr(m, "_connections", {"carol": FailingWS()})
+    monkeypatch.setattr(
+        ws_registry, "registry", _RegistryStub({"carol": _ConnStub(FailingWS())})
+    )
 
     await m._handle_message("alice", _raw("carol", "blob"))
 

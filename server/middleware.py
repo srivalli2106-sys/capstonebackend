@@ -6,14 +6,12 @@ authenticated dependency (with revocation, fail-closed) to
 :mod:`server.auth_service`. This module keeps the original public names so
 existing consumers keep working:
 
-  * ``create_token`` / ``decode_token`` — used by the WebSocket handshake
-    (Phase 7 scope) and pinned by legacy JWT tests.
+  * ``create_token`` / ``decode_token`` — used by HTTP tests; the Phase 7
+    WebSocket handshake authenticates through :mod:`server.ws_auth`.
   * ``require_auth`` — centralized dependency for protected HTTP routes.
-  * ``check_rate_limit`` / ``RATE_LIMITS`` — Redis-backed sliding window.
-
-``decode_token`` intentionally does NOT check revocation: the WebSocket
-handshake calls it directly and revocation is checked by ``require_auth`` for
-HTTP routes. The WebSocket authentication design is out of Phase 6 scope.
+  * ``check_rate_limit`` / ``check_rate_limit_for`` / ``RATE_LIMITS`` —
+    Redis-backed sliding window shared by HTTP routes and the WebSocket
+    connection/message rate gates (categories ``ws_connect``, ``ws_message``).
 """
 
 from __future__ import annotations
@@ -23,6 +21,7 @@ import time
 from fastapi import HTTPException, Request, status
 
 from .auth_service import require_auth  # noqa: F401 - re-exported for routes
+from .config import settings
 from .jwt_auth import (  # noqa: F401 - re-exported for tests/consumers
     JWT_ALGORITHM,
     JWT_EXPIRY_HOURS,
@@ -43,9 +42,9 @@ def decode_token(token: str) -> dict:
     """Decode and fully validate a token: signature, algorithm, issuer,
     expiry, and required claims.
 
-    NOTE: revocation is intentionally not checked here (WebSocket handshake
-    caller). Protected HTTP routes use ``require_auth``, which checks
-    revocation and fails closed on Redis errors.
+    NOTE: revocation is not checked here. HTTP-protected routes use
+    ``require_auth`` (which checks revocation and fails closed on Redis
+    errors); the WebSocket handshake uses :func:`server.ws_auth.verify_ws_token`.
     """
     return verify_access_token(token)
 
@@ -62,13 +61,20 @@ RATE_LIMITS: dict[str, tuple[int, int]] = {
     "logout": (30, 60),          # logout requests per minute
     "keys": (30, 60),            # 30 requests per minute
     "general": (100, 60),        # 100 requests per minute
+    "ws_connect": (settings.ws_connect_rate_per_minute, 60),
+    "ws_message": (settings.ws_message_rate_per_minute, 60),
 }
 
 
-async def check_rate_limit(request: Request, category: str = "general") -> None:
+async def check_rate_limit_for(identity: str, category: str = "general") -> None:
+    """Sliding-window rate limit keyed by ``identity``.
+
+    Raises HTTP 429 when the limit is exceeded. Redis failures propagate so
+    callers decide their own failure policy (HTTP routes fail closed, the
+    WebSocket gates degrade open).
+    """
     limit, window = RATE_LIMITS.get(category, RATE_LIMITS["general"])
-    ip = request.client.host if request.client else "unknown"
-    key = f"ratelimit:{category}:{ip}"
+    key = f"ratelimit:{category}:{identity}"
 
     r = await get_redis()
     now = time.time()
@@ -86,3 +92,8 @@ async def check_rate_limit(request: Request, category: str = "general") -> None:
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Rate limit exceeded for {category}. Try again later.",
         )
+
+
+async def check_rate_limit(request: Request, category: str = "general") -> None:
+    ip = request.client.host if request.client else "unknown"
+    await check_rate_limit_for(ip, category)

@@ -130,6 +130,33 @@ class Settings(BaseSettings):
         default=120, validation_alias="AUTH_CHALLENGE_TTL_SECONDS", ge=5
     )
 
+    # ------------------------------------------------------------------
+    # WebSocket
+    # ------------------------------------------------------------------
+    # Seconds a WebSocket client has to complete the first-frame auth
+    # handshake before the server closes the connection (4001).
+    ws_auth_timeout_seconds: float = Field(
+        default=10.0, validation_alias="WS_AUTH_TIMEOUT_SECONDS", ge=1
+    )
+    # Hard per-process cap on concurrent WebSocket connections. The budget is
+    # reserved before auth and released exactly once per disconnect.
+    ws_max_connections: int = Field(
+        default=1000, validation_alias="WS_MAX_CONNECTIONS", ge=1
+    )
+    # Lifetime of presence/connection markers in Redis ("online:" and
+    # "conn:" keys). Must comfortably exceed the heartbeat gap; the server
+    # refreshes the marker every half-life while a connection is alive.
+    ws_presence_ttl_seconds: int = Field(
+        default=300, validation_alias="WS_PRESENCE_TTL_SECONDS", ge=30
+    )
+    # Redis sliding-window rate limits for the WebSocket path.
+    ws_connect_rate_per_minute: int = Field(
+        default=60, validation_alias="WS_CONNECT_RATE_PER_MINUTE", ge=1
+    )
+    ws_message_rate_per_minute: int = Field(
+        default=120, validation_alias="WS_MESSAGE_RATE_PER_MINUTE", ge=1
+    )
+
 # ------------------------------------------------------------------
     # CORS
     # ------------------------------------------------------------------

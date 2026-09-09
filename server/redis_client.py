@@ -53,7 +53,7 @@ async def close_redis() -> None:
 
 async def set_online(user_id: str) -> None:
     r = await get_redis()
-    await r.set(f"online:{user_id}", "1", ex=300)
+    await r.set(f"online:{user_id}", "1", ex=settings.ws_presence_ttl_seconds)
 
 
 async def is_online(user_id: str) -> bool:
@@ -95,7 +95,9 @@ async def dequeue_all_messages(user_id: str) -> list[str]:
 
 async def register_connection(user_id: str, connection_id: str) -> None:
     r = await get_redis()
-    await r.set(f"conn:{user_id}", connection_id, ex=300)
+    await r.set(
+        f"conn:{user_id}", connection_id, ex=settings.ws_presence_ttl_seconds
+    )
 
 
 async def get_connection(user_id: str) -> str | None:

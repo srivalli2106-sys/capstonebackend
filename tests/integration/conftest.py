@@ -45,3 +45,11 @@ async def _integration_env(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr("server.routes.auth.check_rate_limit", _no_rate_limit)
     monkeypatch.setattr("server.routes.keys.check_rate_limit", _no_rate_limit)
+
+    async def _ws_allow(identity: str) -> bool:
+        return True
+
+    # WebSocket connect/message rate gates are unit-tested; the flow tests
+    # should not be subject to the sliding-window limits.
+    monkeypatch.setattr("server.ws_auth.allow_ws_connect", _ws_allow)
+    monkeypatch.setattr("server.ws_auth.allow_ws_message", _ws_allow)

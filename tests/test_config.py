@@ -186,3 +186,43 @@ def test_auth_challenge_ttl_defaults_and_parses(monkeypatch):
 def test_auth_challenge_ttl_minimum_enforced(monkeypatch):
     with pytest.raises(ValidationError):
         load(monkeypatch, AUTH_CHALLENGE_TTL_SECONDS="1")
+
+
+def test_ws_settings_defaults(monkeypatch):
+    s = load(monkeypatch)
+    assert s.ws_auth_timeout_seconds == 10.0
+    assert s.ws_max_connections == 1000
+    assert s.ws_presence_ttl_seconds == 300
+    assert s.ws_connect_rate_per_minute == 60
+    assert s.ws_message_rate_per_minute == 120
+
+
+def test_ws_settings_env_overrides(monkeypatch):
+    s = load(
+        monkeypatch,
+        WS_AUTH_TIMEOUT_SECONDS="5",
+        WS_MAX_CONNECTIONS="50",
+        WS_PRESENCE_TTL_SECONDS="120",
+        WS_CONNECT_RATE_PER_MINUTE="30",
+        WS_MESSAGE_RATE_PER_MINUTE="10",
+    )
+    assert s.ws_auth_timeout_seconds == 5.0
+    assert s.ws_max_connections == 50
+    assert s.ws_presence_ttl_seconds == 120
+    assert s.ws_connect_rate_per_minute == 30
+    assert s.ws_message_rate_per_minute == 10
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"WS_AUTH_TIMEOUT_SECONDS": "0"},
+        {"WS_MAX_CONNECTIONS": "0"},
+        {"WS_PRESENCE_TTL_SECONDS": "10"},
+        {"WS_CONNECT_RATE_PER_MINUTE": "0"},
+        {"WS_MESSAGE_RATE_PER_MINUTE": "0"},
+    ],
+)
+def test_ws_settings_minimums_enforced(monkeypatch, bad):
+    with pytest.raises(ValidationError):
+        load(monkeypatch, **bad)
