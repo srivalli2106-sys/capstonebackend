@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pymongo.errors import PyMongoError
 from redis.exceptions import RedisError
 
@@ -148,3 +149,17 @@ app.include_router(messages.router)
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/health/ready")
+async def health_ready():
+    # Readiness probe for orchestrators/load balancers. Unlike the process-
+    # liveness /health, it verifies that both infrastructure dependencies are
+    # actually reachable. The response deliberately exposes no infrastructure
+    # details — only 200 {"status": "ready"} or 503 {"status": "unavailable"}.
+    try:
+        await ping_mongo()
+        await ping_redis()
+    except (PyMongoError, RedisError):
+        return JSONResponse(status_code=503, content={"status": "unavailable"})
+    return {"status": "ready"}

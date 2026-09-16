@@ -72,6 +72,64 @@ def _sign(user: dict, nonce: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# POST /auth/register
+# ---------------------------------------------------------------------------
+
+
+class _FakeUserService:
+    def __init__(self):
+        self.calls: list[tuple] = []
+
+    async def register(self, user_id: str, ik_public: str) -> str:
+        self.calls.append((user_id, ik_public))
+        return user_id
+
+
+def test_register_success_returns_201_and_applies_category(client, monkeypatch):
+    user = _keypair("alice")
+    _patch_env(monkeypatch, user, FakeRedis())
+
+    fake_svc = _FakeUserService()
+    recorded: list[str] = []
+
+    async def _record(request, category: str = "general"):
+        recorded.append(category)
+
+    monkeypatch.setattr("server.routes.auth.user_service", fake_svc)
+    monkeypatch.setattr("server.routes.auth.check_rate_limit", _record)
+
+    resp = client.post(
+        "/auth/register",
+        json={"user_id": "alice", "ik_public": "ab" * 32},
+    )
+    assert resp.status_code == 201
+    assert resp.json() == {"status": "registered", "user_id": "alice"}
+    assert fake_svc.calls == [("alice", "ab" * 32)]
+    assert recorded == ["register"]
+
+
+def test_register_conflict_surfaces_as_409(client, monkeypatch):
+    _patch_env(monkeypatch, _keypair("alice"), FakeRedis())
+
+    class _ConflictService:
+        async def register(self, user_id: str, ik_public: str) -> str:
+            from server.exceptions import Conflict
+
+            raise Conflict(
+                f"User '{user_id}' already registered. Re-registration is not allowed."
+            )
+
+    monkeypatch.setattr("server.routes.auth.user_service", _ConflictService())
+
+    resp = client.post(
+        "/auth/register",
+        json={"user_id": "alice", "ik_public": "ab" * 32},
+    )
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "conflict"
+
+
+# ---------------------------------------------------------------------------
 # POST /auth/challenge
 # ---------------------------------------------------------------------------
 

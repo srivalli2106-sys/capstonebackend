@@ -22,3 +22,11 @@ target-version = "py310"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B"]
 ignore = ["E501", "B008"]  # B008: Depends() in defaults is the FastAPI DI idiom
+
+[tool.coverage.run]
+source = ["server"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false

@@ -5,5 +5,4 @@ pymongo==4.9.1
 redis[hiredis]==5.1.0
 pyjwt==2.9.0
 cryptography==43.0.1
-python-multipart==0.0.12
 pydantic-settings==2.6.1

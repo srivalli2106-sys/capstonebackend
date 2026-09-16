@@ -1,0 +1,77 @@
+# Disposable LOCAL DEVELOPMENT stack: backend + MongoDB + Redis.
+#
+# **Not for production use.** Credentials below are throwaway local values that
+# are safe to commit. They exist only so the stack behaves like production
+# (authenticated Mongo, password-protected Redis) without real secrets.
+#
+# Usage:
+#     docker compose up --build
+#     # then
+#     open http://localhost:8000/docs
+#
+# Run the integration test suite against this stack:
+#     $env:RUN_INTEGRATION="1"
+#     $env:MONGODB_URI="mongodb://backend:backend_dev_pw@localhost:27017/secure_messaging?authSource=admin"
+#     $env:MONGODB_DB="secure_messaging"
+#     $env:REDIS_URL="redis://:redis_dev_pw@localhost:6379/0"
+#     pytest -m integration
+#
+# Tear down (removes the throwaway data volume as well):
+#     docker compose down -v
+
+services:
+  mongodb:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: backend
+      MONGO_INITDB_ROOT_PASSWORD: backend_dev_pw
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--username", "backend", "--password", "backend_dev_pw", "--authenticationDatabase", "admin", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  redis:
+    image: redis:7
+    command: ["redis-server", "--requirepass", "redis_dev_pw", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "redis_dev_pw", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  backend:
+    build:
+      context: .
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      APP_ENV: development
+      HOST: 0.0.0.0
+      PORT: "8000"
+      LOG_LEVEL: INFO
+      MONGODB_URI: mongodb://backend:backend_dev_pw@mongodb:27017/secure_messaging?authSource=admin
+      MONGODB_DB: secure_messaging
+      REDIS_URL: redis://:redis_dev_pw@redis:6379/0
+      JWT_SECRET: localdev-only-change-me
+      JWT_ALGORITHM: HS256
+      JWT_EXPIRY_HOURS: "24"
+      JWT_ISSUER: secure-messaging-api
+      AUTH_CHALLENGE_TTL_SECONDS: "120"
+      CORS_ORIGINS: "*"
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+volumes:
+  mongo-data:

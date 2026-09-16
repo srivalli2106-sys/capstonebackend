@@ -157,6 +157,12 @@ def test_missing_required_claim_rejected(missing):
     _assert_401(jwt.encode(full, JWT_SECRET, algorithm=JWT_ALGORITHM))
 
 
+def test_empty_jti_rejected():
+    full = _base_claims(int(time.time()) + 3600)
+    full["jti"] = ""
+    _assert_401(jwt.encode(full, JWT_SECRET, algorithm=JWT_ALGORITHM))
+
+
 def test_non_string_subject_rejected():
     now = int(time.time())
     token = jwt.encode(

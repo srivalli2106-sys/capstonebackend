@@ -55,7 +55,10 @@ capstonebackend/
 │       └── messages.py      ← WebSocket relay for encrypted messages
 │
 ├── tests/                   ← pytest suite (unit + integration)
-├── .github/workflows/       ← CI (ruff, unit tests, integration tests)
+├── docs/DEPLOYMENT.md       ← production deployment & operations guide
+├── .github/workflows/       ← CI (ruff, unit tests, integration tests, Docker build)
+├── Dockerfile               ← production image (non-root, no secrets baked in)
+├── docker-compose.yml       ← disposable local dev stack (backend + Mongo + Redis)
 ├── requirements.txt         ← Runtime dependencies (pinned)
 ├── requirements-dev.txt     ← Test/lint dependencies (pinned)
 ├── pyproject.toml           ← Test & lint configuration
@@ -70,6 +73,7 @@ capstonebackend/
 | Method | Path                          | Auth | Description                                   |
 |--------|-------------------------------|------|-----------------------------------------------|
 | GET    | `/health`                     | —    | Liveness probe → `{"status": "ok"}`           |
+| GET    | `/health/ready`               | —    | Readiness probe → `200 {"status":"ready"}` / `503 {"status":"unavailable"}` |
 | POST   | `/auth/register`              | —    | One-time registration (user_id + identity key)|
 | POST   | `/auth/login`                 | —    | Returns a JWT for authenticated requests      |
 | POST   | `/keys/upload`                | JWT  | Upload signed prekey + one-time prekey        |
@@ -146,6 +150,26 @@ python -m uvicorn server.app:app --host 0.0.0.0 --port 8000
 
 Then open http://localhost:8000/docs to try the API.
 
+### Optional: run the full local stack with Docker
+
+```powershell
+docker compose up --build
+# open http://localhost:8000/docs ; shut down with:
+docker compose down -v   # -v also deletes the throwaway Mongo data volume
+```
+
+> The compose stack uses explicit **throwaway local credentials** (see
+> `docker-compose.yml`) and is for development only — never for production.
+
+---
+
+## 📦 Deploying
+
+See **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** — a provider-neutral guide to
+production configuration, the Docker image, health checks (liveness vs.
+readiness), reverse-proxy/TLS requirements, MongoDB & Redis security, backups,
+secrets management, scaling, and rollback.
+
 ---
 
 ## 🧪 Running the tests
@@ -197,7 +221,10 @@ relay of message blobs, and strict config validation for production.
 
 - [x] **Phase 1** — Centralized configuration + project foundation
 - [x] **Phase 2** — Automated test suite + CI + docs
-- [ ] Crypto/service layer, hardening pass, token hygiene, observability
+- [x] **Phase 8** — Service + repository layers (Phase 3–8)
+- [x] **Phase 9** — Comprehensive testing & verification
+- [x] **Phase 10** — Docker / CI-CD / production config / deployment
+- [ ] Phase 11+ — Message envelope/IDs, WS hardening, E2EE protocol (planned)
 
 ---
 

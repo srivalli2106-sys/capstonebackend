@@ -7,6 +7,7 @@ from server.app import app
 # Expected HTTP endpoints: path -> set of HTTP methods.
 EXPECTED_HTTP = {
     "/health": {"GET"},
+    "/health/ready": {"GET"},
     "/auth/register": {"POST"},
     "/auth/login": {"POST"},
     "/auth/challenge": {"POST"},
