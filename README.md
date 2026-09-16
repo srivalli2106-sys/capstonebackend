@@ -6,9 +6,11 @@ Everything (messages, keys, files) is encrypted **on the device** before it
 ever reaches the server. The server only relays opaque encrypted blobs — it
 can never read the message contents.
 
-> ⚠️ This is a learning / demo project. The crypto (`crypto/`, `protocol/`,
-> `client/`) is **not yet implemented**. Do not use it to protect real,
-> sensitive messages until the full protocol is built and audited.
+> ⚠️ This is a learning / demo project. The client-facing crypto (`client/`) is
+> **not yet implemented**; `protocol/` is a reference implementation of the
+> messaging crypto (X3DH + Double Ratchet) that will drive it. Do not use this
+> to protect real, sensitive messages until the full protocol is built and
+> audited.
 
 ---
 
@@ -54,8 +56,11 @@ capstonebackend/
 │       ├── keys.py          ← Key bundle upload / fetch / one-time key
 │       └── messages.py      ← WebSocket relay for encrypted messages
 │
+├── protocol/                ← E2EE reference implementation (X3DH + Double Ratchet)
 ├── tests/                   ← pytest suite (unit + integration)
 ├── docs/DEPLOYMENT.md       ← production deployment & operations guide
+├── docs/E2EE.md             ← end-to-end encryption protocol spec
+├── docs/PROTOCOL.md         ← message envelope & wire protocol spec
 ├── .github/workflows/       ← CI (ruff, unit tests, integration tests, Docker build)
 ├── Dockerfile               ← production image (non-root, no secrets baked in)
 ├── docker-compose.yml       ← disposable local dev stack (backend + Mongo + Redis)
@@ -79,9 +84,17 @@ capstonebackend/
 | POST   | `/keys/upload`                | JWT  | Upload signed prekey + one-time prekey        |
 | GET    | `/keys/bundle/{user_id}`      | JWT  | Fetch a user's key bundle (consumes OPK)      |
 | GET    | `/keys/prekeys/{user_id}`     | JWT  | OPK availability status                       |
-| WS     | `/ws`                        | JWT  | Real-time message relay (first-frame `{"type":"auth","token":"..."}`) |
+| WS     | `/ws`                        | JWT  | Real-time envelope relay (first-frame `{"type":"auth","token":"..."}`, then `{"id","type","recipient","data"}`); idle timeout, keepalive pings, per-IP cap |
 
 Interactive docs: **http://localhost:8000/docs** (Swagger UI).
+
+> 📦 **Wire protocol:** the message envelope, ULID message ids, the message-type
+> catalog, and delivery/replay semantics are specified in
+> **[docs/PROTOCOL.md](docs/PROTOCOL.md)**. The end-to-end crypto (X3DH +
+> Double Ratchet) is specified in **[docs/E2EE.md](docs/E2EE.md)**.
+>
+> 🔒 The `protocol/` package is the E2EE reference implementation used to pin
+> the crypto behavior; the server binary does not link it.
 
 ---
 
@@ -195,7 +208,7 @@ Redis service containers on every push/PR.
 Lint with:
 
 ```powershell
-ruff check server tests
+ruff check server tests protocol
 ```
 
 ---
@@ -205,11 +218,15 @@ ruff check server tests
 | Property | How it's achieved |
 |----------|-------------------|
 | **One-time registration** | Unique index on `user_id` — cannot re-register or impersonate |
-| **End-to-end encryption** | Messages encrypted before leaving the device (planned) |
-| **Forward secrecy** | Double Ratchet — fresh key per message (planned) |
-| **Per-session keys** | Fresh key exchange per session (planned) |
-| **Identity verification** | X3DH with signed prekeys (planned) |
-| **Message integrity** | Tampering fails decryption (planned) |
+| **End-to-end encryption** | Messages encrypted before leaving the device (client planned; protocol reference in `protocol/`) |
+| **Forward secrecy** | Double Ratchet — fresh key per message (client planned) |
+| **Per-session keys** | Fresh X3DH key exchange per session (client planned) |
+| **Identity verification** | X3DH with signed prekeys bound to the registered Ed25519 identity (client planned; verification helper in `protocol/keys.py`) |
+| **Message integrity** | Tampering fails AEAD decryption (client planned) |
+
+All of the above rely on a client implementation; the server's part is already
+in place (key-bundle exchange incl. `ik_public`, single-use OPK consumption on
+fetch, and opaque relay of the ciphertext).
 
 The server-side guarantees implemented **today**: JWT auth on protected
 routes, per-IP rate limiting (one-time registration, login, keys), opaque
@@ -224,7 +241,12 @@ relay of message blobs, and strict config validation for production.
 - [x] **Phase 8** — Service + repository layers (Phase 3–8)
 - [x] **Phase 9** — Comprehensive testing & verification
 - [x] **Phase 10** — Docker / CI-CD / production config / deployment
-- [ ] Phase 11+ — Message envelope/IDs, WS hardening, E2EE protocol (planned)
+- [x] **Phase 11** — Message ids, envelope, message types, protocol doc
+- [x] **Phase 12** — WS operational hardening: idle timeout, keepalive pings,
+  per-IP connection cap
+- [x] **Phase 13** — E2EE protocol reference: X3DH + Double Ratchet specified
+  (`docs/E2EE.md`) and implemented in the `protocol/` package, with the server
+  exposing `ik_public` on key bundles so peers can verify signed prekeys
 
 ---
 

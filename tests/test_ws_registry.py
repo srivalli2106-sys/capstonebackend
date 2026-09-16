@@ -84,3 +84,55 @@ async def test_close_all_swallows_close_errors():
     reg = WsRegistry(max_connections=10)
     await reg.register("alice", _conn("c1", "alice", _BrokenWS()))
     await reg.close_all()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Phase 12: per-IP connection budget
+# ---------------------------------------------------------------------------
+
+
+async def test_try_register_ip_respects_per_ip_cap():
+    reg = WsRegistry(max_connections=10, max_connections_per_ip=2)
+    assert await reg.try_register_ip("1.2.3.4") is True
+    assert await reg.try_register_ip("1.2.3.4") is True
+    assert await reg.try_register_ip("1.2.3.4") is False
+    # A different peer is unaffected.
+    assert await reg.try_register_ip("5.6.7.8") is True
+
+
+async def test_release_ip_frees_capacity():
+    reg = WsRegistry(max_connections=10, max_connections_per_ip=2)
+    assert await reg.try_register_ip("1.2.3.4") is True
+    await reg.release_ip("1.2.3.4")
+    assert await reg.try_register_ip("1.2.3.4") is True
+    await reg.release_ip("1.2.3.4")
+    await reg.release_ip("1.2.3.4")  # idempotent
+    assert await reg.try_register_ip("1.2.3.4") is True
+
+
+async def test_try_register_ip_counts_are_isolated_per_ip():
+    reg = WsRegistry(max_connections=10, max_connections_per_ip=1)
+    await reg.try_register_ip("a")
+    await reg.try_register_ip("b")
+    assert await reg.try_register_ip("a") is False
+    assert reg.max_connections_per_ip == 1
+
+
+async def test_try_register_ip_disabled_when_zero():
+    reg = WsRegistry(max_connections=10, max_connections_per_ip=0)
+    for _ in range(50):
+        assert await reg.try_register_ip("1.2.3.4") is True
+
+
+async def test_unknown_ip_uses_sentinel_key():
+    reg = WsRegistry(max_connections=10, max_connections_per_ip=1)
+    assert await reg.try_register_ip("") is True  # client is None -> ""
+    assert await reg.try_register_ip("") is False
+
+
+async def test_close_all_resets_ip_accounting():
+    reg = WsRegistry(max_connections=10, max_connections_per_ip=1)
+    await reg.try_register_ip("1.2.3.4")
+    await reg.register("alice", _conn("c1", "alice", _FakeWS()))
+    await reg.close_all()
+    assert await reg.try_register_ip("1.2.3.4") is True

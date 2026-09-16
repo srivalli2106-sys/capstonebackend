@@ -39,15 +39,21 @@ class WsConnection:
 
 
 class WsRegistry:
-    def __init__(self, max_connections: int) -> None:
+    def __init__(self, max_connections: int, max_connections_per_ip: int = 20) -> None:
         self._max_connections = max_connections
+        self._max_per_ip = max_connections_per_ip
         self._reserved = 0
         self._by_user: dict[str, WsConnection] = {}
+        self._by_ip: dict[str, int] = {}
         self._lock = asyncio.Lock()
 
     @property
     def max_connections(self) -> int:
         return self._max_connections
+
+    @property
+    def max_connections_per_ip(self) -> int:
+        return self._max_per_ip
 
     async def try_reserve(self) -> bool:
         """Reserve a connection slot; False when the budget is exhausted."""
@@ -62,6 +68,32 @@ class WsRegistry:
         async with self._lock:
             if self._reserved > 0:
                 self._reserved -= 1
+
+    async def try_register_ip(self, ip: str) -> bool:
+        """Account one connection to ``ip``; False when its cap is reached.
+
+        ``max_connections_per_ip == 0`` disables the per-IP cap. Unknown peers
+        (``client`` is None) are normalized to a sentinel key.
+        """
+        if self._max_per_ip <= 0:
+            return True
+        key = ip or "<unknown>"
+        async with self._lock:
+            count = self._by_ip.get(key, 0)
+            if count >= self._max_per_ip:
+                return False
+            self._by_ip[key] = count + 1
+            return True
+
+    async def release_ip(self, ip: str) -> None:
+        """Release one per-IP accounting unit (idempotent)."""
+        key = ip or "<unknown>"
+        async with self._lock:
+            count = self._by_ip.get(key, 0)
+            if count <= 1:
+                self._by_ip.pop(key, None)
+            else:
+                self._by_ip[key] = count - 1
 
     async def register(
         self, user_id: str, conn: WsConnection
@@ -89,6 +121,7 @@ class WsRegistry:
         async with self._lock:
             conns = list(self._by_user.values())
             self._by_user.clear()
+            self._by_ip.clear()
             self._reserved = 0
         if conns:
             await asyncio.gather(
@@ -101,7 +134,10 @@ class WsRegistry:
 
 
 # Shared by every WebSocket endpoint in this process.
-registry = WsRegistry(settings.ws_max_connections)
+registry = WsRegistry(
+    settings.ws_max_connections,
+    max_connections_per_ip=settings.ws_max_connections_per_ip,
+)
 
 
 async def close_websocket(

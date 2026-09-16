@@ -143,6 +143,23 @@ class Settings(BaseSettings):
     ws_max_connections: int = Field(
         default=1000, validation_alias="WS_MAX_CONNECTIONS", ge=1
     )
+    # Per-IP cap on concurrent WebSocket connections (checked per connection,
+    # pre-auth, alongside the global budget). 0 disables the check.
+    ws_max_connections_per_ip: int = Field(
+        default=20, validation_alias="WS_MAX_CONNECTIONS_PER_IP", ge=0
+    )
+    # Seconds a fully-authenticated connection may send no application frame
+    # before the server closes it (1009/4008). 0 disables the idle timeout.
+    # Requires the client/app-level keepalives (or the transport pings below).
+    ws_idle_timeout_seconds: float = Field(
+        default=180.0, validation_alias="WS_IDLE_TIMEOUT_SECONDS", ge=0
+    )
+    # Seconds between server-initiated WebSocket ping frames. Ought to be
+    # smaller than ws_idle_timeout_seconds: healthy idle connections answer
+    # with a pong that resets the idle window. 0 disables the keepalive.
+    ws_keepalive_seconds: float = Field(
+        default=30.0, validation_alias="WS_KEEPALIVE_SECONDS", ge=0
+    )
     # Lifetime of presence/connection markers in Redis ("online:" and
     # "conn:" keys). Must comfortably exceed the heartbeat gap; the server
     # refreshes the marker every half-life while a connection is alive.

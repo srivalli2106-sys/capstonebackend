@@ -264,16 +264,25 @@ async def test_oversized_ws_frame_dropped(monkeypatch, caplog):
 
 @pytest.mark.asyncio
 async def test_ws_frame_invalid_recipient_dropped(monkeypatch, caplog):
+    from server.message_id import new_message_id
+
     async def fail_redis(**kwargs):
         raise AssertionError("redis must not be touched for invalid recipients")
 
     monkeypatch.setattr(
         "server.services.message_service.presence_repository.is_online", fail_redis
     )
-    raw = json.dumps({"to": "r" * 65, "data": "not-an-encrypted-blob"})
+    raw = json.dumps(
+        {
+            "id": new_message_id(),
+            "type": "text",
+            "recipient": "r" * 65,
+            "data": "not-an-encrypted-blob",
+        }
+    )
     with caplog.at_level(logging.WARNING, logger="server.services.message_service"):
         await message_service.handle_message("alice", raw)
-    assert "invalid recipient" in caplog.text
+    assert "invalid message envelope" in caplog.text
     assert "not-an-encrypted-blob" not in caplog.text
 
 

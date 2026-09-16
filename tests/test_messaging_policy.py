@@ -7,6 +7,13 @@ Phase 4 policy, applied to the service layer directly:
   explicit failure and the sender's connection stays alive
 * malformed payloads never touch Redis
 
+Phase 11 policy additions:
+* inbound frames are normalized into enveloped, server-authoritative
+  envelopes (sender/version/timestamp never trusted from the client)
+* an envelope id repeated inside the dedup window is treated as a replay
+  and dropped
+* clients cannot spoof a foreign sender id via the wire frame
+
 MessageService is constructed with fakes for its injected repositories and
 registry lookup, so no monkeypatching of module globals is needed.
 """
@@ -16,11 +23,31 @@ from __future__ import annotations
 import json
 import logging
 
+from server.message_id import new_message_id
 from server.services.message_service import MessageService
 
 
-def _raw(to: str, data: str) -> str:
-    return json.dumps({"to": to, "data": data})
+def _raw(to: str, data: str, *, mid: str | None = None) -> str:
+    return json.dumps(
+        {
+            "id": mid or new_message_id(),
+            "type": "text",
+            "recipient": to,
+            "data": data,
+        }
+    )
+
+
+def _assert_envelope(
+    parsed: dict, *, sender: str, recipient: str, data: str
+) -> None:
+    assert parsed["version"] == 1
+    assert parsed["type"] == "text"
+    assert parsed["sender"] == sender
+    assert parsed["recipient"] == recipient
+    assert parsed["data"] == data
+    assert isinstance(parsed["id"], str) and len(parsed["id"]) == 26
+    assert isinstance(parsed["timestamp"], int)
 
 
 class _Messages:
@@ -84,7 +111,10 @@ async def test_presence_failure_falls_back_to_queue():
 
     await svc.handle_message("alice", _raw("carol", "blob"))
 
-    assert queued == [("carol", json.dumps({"from": "alice", "data": "blob"}))]
+    assert len(queued) == 1
+    _assert_envelope(
+        json.loads(queued[0][1]), sender="alice", recipient="carol", data="blob"
+    )
 
 
 async def test_queue_failure_is_reported_and_never_claimed(caplog):
@@ -132,7 +162,9 @@ async def test_online_recipient_gets_forwarded_without_queueing():
 
     await svc.handle_message("alice", _raw("carol", "blob"))
 
-    assert json.loads(sent["payload"]) == {"from": "alice", "data": "blob"}
+    _assert_envelope(
+        json.loads(sent["payload"]), sender="alice", recipient="carol", data="blob"
+    )
 
 
 async def test_forward_send_failure_falls_back_to_queue():
@@ -159,6 +191,9 @@ async def test_forward_send_failure_falls_back_to_queue():
 
     assert len(queued) == 1
     assert queued[0][0] == "carol"
+    _assert_envelope(
+        json.loads(queued[0][1]), sender="alice", recipient="carol", data="blob"
+    )
 
 
 async def test_invalid_payload_never_touches_redis():
@@ -274,3 +309,146 @@ async def test_flush_dequeue_failure_logs_warning_and_skips(caplog):
         await svc.flush_pending("alice", _Recorder())
 
     assert "could not flush queued messages for alice" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Phase 11: envelope identity / replay protection
+# ---------------------------------------------------------------------------
+
+
+async def test_duplicate_envelope_id_is_dropped():
+    sent: list[str] = []
+
+    class FakeWS:
+        async def send_text(self, payload):
+            sent.append(payload)
+
+    async def _online(user_id):
+        return True
+
+    conn = _ConnStub(FakeWS())
+    svc = MessageService(
+        messages=_Messages(),
+        presence=_Presence(online=_online),
+        registry_lookup=_registry(conn),
+    )
+
+    mid = new_message_id()
+    await svc.handle_message("alice", _raw("carol", "blob", mid=mid))
+    await svc.handle_message("alice", _raw("carol", "blob-again", mid=mid))
+
+    assert len(sent) == 1
+    assert json.loads(sent[0])["data"] == "blob"
+
+
+async def test_distinct_ids_are_all_processed():
+    sent: list[str] = []
+
+    class FakeWS:
+        async def send_text(self, payload):
+            sent.append(payload)
+
+    async def _online(user_id):
+        return True
+
+    svc = MessageService(
+        messages=_Messages(),
+        presence=_Presence(online=_online),
+        registry_lookup=_registry(_ConnStub(FakeWS())),
+    )
+
+    await svc.handle_message("alice", _raw("carol", "one"))
+    await svc.handle_message("alice", _raw("carol", "two"))
+
+    assert len(sent) == 2
+
+
+async def test_replay_window_expiry_allows_same_id_again():
+    sent: list[str] = []
+
+    class FakeWS:
+        async def send_text(self, payload):
+            sent.append(payload)
+
+    async def _online(user_id):
+        return True
+
+    mid = new_message_id()
+    svc = MessageService(
+        messages=_Messages(),
+        presence=_Presence(online=_online),
+        registry_lookup=_registry(_ConnStub(FakeWS())),
+        dedup_ttl_seconds=1,
+    )
+
+    await svc.handle_message("alice", _raw("carol", "one", mid=mid))
+    assert len(sent) == 1
+
+    # Force the window to expire without real sleeping.
+    svc._seen_ids[(("alice", mid))] -= 2.0
+
+    await svc.handle_message("alice", _raw("carol", "two", mid=mid))
+    assert len(sent) == 2
+
+
+async def test_spoofed_sender_is_overwritten():
+    sent: list[str] = []
+
+    class FakeWS:
+        async def send_text(self, payload):
+            sent.append(payload)
+
+    async def _online(user_id):
+        return True
+
+    conn = _ConnStub(FakeWS())
+    svc = MessageService(
+        messages=_Messages(),
+        presence=_Presence(online=_online),
+        registry_lookup=_registry(conn),
+    )
+
+    mid = new_message_id()
+    frame = json.dumps(
+        {
+            "id": mid,
+            "type": "text",
+            "sender": "mallory",
+            "recipient": "carol",
+            "data": "blob",
+        }
+    )
+    await svc.handle_message("alice", frame)
+
+    _assert_envelope(
+        json.loads(sent[0]), sender="alice", recipient="carol", data="blob"
+    )
+
+
+async def test_unknown_message_type_is_dropped():
+    sent: list[str] = []
+
+    class FakeWS:
+        async def send_text(self, payload):
+            sent.append(payload)
+
+    async def _online(user_id):
+        return True
+
+    svc = MessageService(
+        messages=_Messages(),
+        presence=_Presence(online=_online),
+        registry_lookup=_registry(_ConnStub(FakeWS())),
+    )
+
+    frame = json.dumps(
+        {
+            "id": new_message_id(),
+            "type": "not-a-real-type",
+            "recipient": "carol",
+            "data": "blob",
+        }
+    )
+    await svc.handle_message("alice", frame)
+
+    assert sent == []

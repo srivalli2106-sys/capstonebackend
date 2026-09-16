@@ -24,7 +24,7 @@ select = ["E", "F", "W", "I", "UP", "B"]
 ignore = ["E501", "B008"]  # B008: Depends() in defaults is the FastAPI DI idiom
 
 [tool.coverage.run]
-source = ["server"]
+source = ["server", "protocol"]
 branch = true
 
 [tool.coverage.report]

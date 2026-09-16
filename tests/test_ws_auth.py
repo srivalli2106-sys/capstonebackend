@@ -71,6 +71,104 @@ async def test_receive_ws_event_disconnect():
     )
 
 
+async def test_receive_ws_event_empty_data_frame_is_none():
+    # websocket.receive with neither text nor bytes (empty frame).
+    assert await wa.receive_ws_event(_EventWS({"type": "websocket.receive"})) is None
+
+
+async def test_receive_ws_event_ping_pong_are_control_events():
+    assert await wa.receive_ws_event(_EventWS({"type": "websocket.ping"})) == (
+        "ping",
+        None,
+    )
+    assert await wa.receive_ws_event(_EventWS({"type": "websocket.pong"})) == (
+        "pong",
+        None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 12: idle timeout + keepalive
+# ---------------------------------------------------------------------------
+
+
+class _IdleSettings:
+    def __init__(self, idle: float):
+        self.ws_idle_timeout_seconds = idle
+
+
+async def test_idle_receive_passes_events_through(monkeypatch):
+    monkeypatch.setattr(wa, "settings", _IdleSettings(10.0))
+    assert await wa.receive_ws_event_with_idle_timeout(_EventWS(_text("hi"))) == (
+        "text",
+        "hi",
+    )
+
+
+async def test_idle_receive_disabled_when_zero(monkeypatch):
+    monkeypatch.setattr(wa, "settings", _IdleSettings(0.0))
+    assert await wa.receive_ws_event_with_idle_timeout(_EventWS(_text("hi"))) == (
+        "text",
+        "hi",
+    )
+
+
+async def test_idle_receive_times_out_with_4008(monkeypatch):
+    monkeypatch.setattr(wa, "settings", _IdleSettings(0.01))
+
+    class _HangingWS(_EventWS):
+        async def receive(self):
+            await asyncio.sleep(60)
+            return {}
+
+    with pytest.raises(wa.WsAuthError) as exc:
+        await wa.receive_ws_event_with_idle_timeout(_HangingWS({}))
+    assert exc.value.code == wa.WS_IDLE_TIMEOUT
+    assert exc.value.reason == wa.REASON_IDLE_TIMEOUT
+
+
+class _PingWS:
+    """WebSocket stub whose send records ASGI messages."""
+
+    def __init__(self, fail_send=False):
+        self.sent: list[dict] = []
+        self._fail_send = fail_send
+
+    async def send(self, message: dict) -> None:
+        if self._fail_send:
+            raise RuntimeError("gone")
+        self.sent.append(message)
+
+
+async def _run_keepalive(ws, interval, duration):
+    task = asyncio.create_task(wa.keepalive_ping(ws, interval))
+    await asyncio.sleep(duration)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+async def test_keepalive_ping_emits_pings_periodically():
+    ws = _PingWS()
+    await _run_keepalive(ws, interval=0.01, duration=0.08)
+    assert len(ws.sent) >= 2
+    assert all(m == {"type": "websocket.ping"} for m in ws.sent)
+
+
+async def test_keepalive_ping_never_pings_when_disabled():
+    ws = _PingWS()
+    await wa.keepalive_ping(ws, 0.0)  # returns immediately, sends nothing
+    assert ws.sent == []
+
+
+async def test_keepalive_ping_exits_silently_when_socket_gone():
+    ws = _PingWS(fail_send=True)
+    task = asyncio.create_task(wa.keepalive_ping(ws, 0.01))
+    await asyncio.sleep(0.05)
+    assert task.done()
+    assert task.exception() is None
+
+
 async def test_receive_ws_event_unexpected_type_is_none():
     assert await wa.receive_ws_event(_EventWS({"type": "websocket.connect"})) is None
 
@@ -139,6 +237,24 @@ async def test_receive_auth_token_rejects_binary_first_frame(monkeypatch):
         await wa.receive_auth_token(_EventWS(_bytes(b"\x00")))
     assert exc.value.code == wa.WS_POLICY_VIOLATION
     assert exc.value.reason == wa.REASON_POLICY
+
+
+async def test_receive_auth_token_rejects_control_first_frame(monkeypatch):
+    # A control/keepalive frame before auth is an auth failure, not a message.
+    monkeypatch.setattr(wa, "settings", _PATCHED_SETTINGS)
+    with pytest.raises(wa.WsAuthError) as exc:
+        await wa.receive_auth_token(_EventWS({"type": "websocket.pong"}))
+    assert exc.value.code == wa.WS_AUTH_REQUIRED
+    assert exc.value.reason == wa.REASON_AUTH_FAILED
+
+
+async def test_receive_auth_token_rejects_non_frame_event(monkeypatch):
+    # An event that translates to None (unrecognized type) is an auth failure.
+    monkeypatch.setattr(wa, "settings", _PATCHED_SETTINGS)
+    with pytest.raises(wa.WsAuthError) as exc:
+        await wa.receive_auth_token(_EventWS({"type": "websocket.connect"}))
+    assert exc.value.code == wa.WS_AUTH_REQUIRED
+    assert exc.value.reason == wa.REASON_AUTH_FAILED
 
 
 async def test_receive_auth_token_times_out(monkeypatch):

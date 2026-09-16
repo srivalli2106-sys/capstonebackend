@@ -2,7 +2,9 @@
 
 Owns everything the WebSocket relay does with one inbound message frame:
 
-  * bounding/validating the frame and the recipient (before any Redis work),
+  * validating the frame and building the server-authoritative envelope
+    (see :mod:`server.envelope`) before any Redis work,
+  * replay protection: an envelope id seen within the dedup window is dropped,
   * deciding whether the recipient is reachable right now (presence read that
     degrades to "offline" on Redis failure),
   * forwarding to the live socket when reachable, else queueing,
@@ -20,20 +22,22 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import Callable
 
 from .. import ws_registry
+from ..envelope import DEDUP_TTL_SECONDS, normalize_envelope
 from ..repositories.message_repository import message_repository
 from ..repositories.presence_repository import presence_repository
 from ..repositories.protocols import MessageRepository, PresenceRepository
 
 logger = logging.getLogger(__name__)
 
-# Input bounds (Phase 5). The whole JSON frame and the recipient id are
-# bounded to keep Redis keys and forwarded frames from growing unboundedly.
-# These are protocol inputs only: message contents are never inspected.
+# Input bounds (Phase 5). The whole JSON frame is bounded to keep Redis keys
+# and forwarded frames from growing unboundedly. The envelope payload itself
+# is bounded by envelope.MAX_DATA_CHARS. These are protocol inputs only:
+# message contents are never inspected.
 MAX_WS_MESSAGE_CHARS = 65536
-MAX_TO_LENGTH = 64
 
 
 def _default_registry_lookup(user_id: str):
@@ -49,12 +53,43 @@ class MessageService:
         messages: MessageRepository | None = None,
         presence: PresenceRepository | None = None,
         registry_lookup: Callable[[str], object] | None = None,
+        dedup_ttl_seconds: int = DEDUP_TTL_SECONDS,
+        max_seen_ids: int = 20000,
     ) -> None:
         self._messages = messages or message_repository
         self._presence = presence or presence_repository
         # Resolved at call time (module attribute) so tests can swap the
         # process registry after construction.
         self._lookup = registry_lookup or _default_registry_lookup
+        # In-process replay window: envelope id -> monotonic seen-at.
+        self._seen_ids: dict[tuple[str, str], float] = {}
+        self._dedup_ttl = dedup_ttl_seconds
+        self._max_seen_ids = max_seen_ids
+
+    def _is_duplicate(self, sender_id: str, message_id: str) -> bool:
+        """Track envelope ids seen in the last TTL; True => drop (replay).
+
+        The window is in-process only (documented: cross-restart replay
+        protection is the client's job via unique ids/nonces) and is bounded
+        with a worst-case FIFO eviction.
+        """
+        now = time.monotonic()
+        stale = [
+            key
+            for key, seen_at in self._seen_ids.items()
+            if now - seen_at > self._dedup_ttl
+        ]
+        for key in stale:
+            del self._seen_ids[key]
+
+        key = (sender_id, message_id)
+        if key in self._seen_ids:
+            return True
+        if len(self._seen_ids) >= self._max_seen_ids:
+            oldest = min(self._seen_ids, key=self._seen_ids.get)
+            del self._seen_ids[oldest]
+        self._seen_ids[key] = now
+        return False
 
     async def handle_message(self, sender_id: str, raw: str) -> None:
         """Process one inbound frame: forward, queue, or drop. Never raises."""
@@ -64,22 +99,20 @@ class MessageService:
             logger.warning("dropping oversized websocket message from %s", sender_id)
             return
 
-        try:
-            msg = json.loads(raw)
-        except json.JSONDecodeError:
+        envelope = normalize_envelope(raw, sender_id)
+        if envelope is None:
+            logger.warning("dropping invalid message envelope from %s", sender_id)
             return
 
-        recipient_id = msg.get("to")
-        data = msg.get("data")
-
-        if not recipient_id or not data:
-            return
-        if not isinstance(recipient_id, str) or len(recipient_id) > MAX_TO_LENGTH:
-            logger.warning("dropping message with invalid recipient from %s", sender_id)
+        recipient_id = envelope["recipient"]
+        if self._is_duplicate(sender_id, envelope["id"]):
+            logger.info(
+                "dropping duplicate envelope %s from %s", envelope["id"], sender_id
+            )
             return
 
         # Build the payload to forward (server never decrypts)
-        forward = json.dumps({"from": sender_id, "data": data})
+        forward = json.dumps(envelope)
 
         # Presence failures degrade gracefully: if we cannot read presence we
         # treat the recipient as offline and fall through to the queue path.

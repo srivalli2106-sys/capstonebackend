@@ -28,8 +28,8 @@ Key properties:
 - **Single application worker.** The WebSocket registry, presence counts and
   the rate-limit windows live in process memory. Running multiple workers
   without externalizing that state would fragment presence/queues and weaken
-  rate limiting. Scale out later only after making that state shared
-  (Phase 12 hardening), then scale horizontally behind sticky routing.
+  rate limiting. Scale out later only after making that state shared, then
+  scale horizontally behind sticky routing.
 - **No static files, no job workers.** This is an API-only process.
 - **TLS terminates at the reverse proxy.** The app itself does not speak TLS;
   it relies on `X-Forwarded-Proto` being trusted (see §5).
@@ -125,7 +125,41 @@ index creation is idempotent and happens before serving.
   WebSocket handshake.
 - Keep the app on the internal network and expose only the proxy publicly.
 
-## 7. MongoDB security & backups
+## 7. WebSocket operations
+
+The `/ws` endpoint is where production pressure shows up. Tuning knobs:
+
+| Setting | Default | Meaning |
+|---------|---------|---------|
+| `WS_MAX_CONNECTIONS` | 1000 | Hard per-process connection budget; excess connections are refused during the handshake (`1013`) |
+| `WS_MAX_CONNECTIONS_PER_IP` | 20 | Per-source-IP connection cap (0 disables); refusals reuse `1013` so no per-IP policy detail leaks |
+| `WS_IDLE_TIMEOUT_SECONDS` | 180 | Max silence (no application frame) before the server closes with `4008 "Idle timeout"` (0 disables) |
+| `WS_KEEPALIVE_SECONDS` | 30 | Server-initiated WS ping interval; peers answer pings automatically and the pong resets the idle window (keep it below the idle timeout) |
+
+Behavioral notes:
+
+- **Keepalive & NAT/proxies.** The app sends WS ping frames itself — no
+  separate heartbeat message type is needed. Healthy idle connections are
+  never condemned: their automatic pongs keep the idle window fresh, and the
+  ping traffic keeps NAT/proxy tunnels warm. When `WS_KEEPALIVE_SECONDS` is 0
+  (or a proxy strips control frames) silence is bounded only by
+  `WS_IDLE_TIMEOUT_SECONDS`.
+- **Refusals before accept.** When the process budget or the per-IP cap is
+  reached the server closes the inbound socket during the handshake with
+  `1013`. Clients should treat that as "try again with backoff".
+- **Clients must reconnect with exponential backoff + jitter** and
+  re-authenticate. Pending unsent messages should be resent with their
+  original envelope `id`: the server deduplicates by `(sender, id)` for five
+  minutes, so safe retries are cheap.
+- **Single-worker assumption.** Connection accounting is process-local. With
+  multiple instances use sticky WSS routing or externalize the state
+  (see §12 Scaling).
+- **Auth vs idle timeouts.** `WS_AUTH_TIMEOUT_SECONDS` guards only the first
+  (auth) frame; the idle window guards the rest of the connection.
+
+The client-facing close-code contract lives in `docs/PROTOCOL.md`.
+
+## 8. MongoDB security & backups
 
 - Use **MongoDB Atlas** (or equivalent managed service) or a self-hosted MongoDB
   with authentication enabled; never bind a database publicly.
@@ -139,7 +173,7 @@ index creation is idempotent and happens before serving.
 - For self-hosted: bind `127.0.0.1`/private network, enable `--auth`, keep
   MongoDB patched, restrict the firewall to the app hosts only.
 
-## 8. Redis security
+## 9. Redis security
 
 - Set a **strong `requirepass`** and put it in `REDIS_URL` as
   `redis://:password@host:6379/0`.
@@ -150,7 +184,7 @@ index creation is idempotent and happens before serving.
   is recovered naturally.
 - Keep Redis patched; if using a managed Redis, enable encryption in transit.
 
-## 9. Logging & observability
+## 10. Logging & observability
 
 - Container logs go to **stdout** (`PYTHONUNBUFFERED=1` set in the image) —
   collect with any log shipper.
@@ -160,7 +194,7 @@ index creation is idempotent and happens before serving.
 - Recommended alerts: process restart loops, readiness 503, JWT auth failure
   spikes, per-IP rate-limit hits, 5xx ratio.
 
-## 10. Secrets management
+## 11. Secrets management
 
 - **Never** put secrets in the image, repo, compose files, or container env at
   build time. `.env` is git-ignored; `.dockerignore` excludes it.
@@ -171,22 +205,22 @@ index creation is idempotent and happens before serving.
 - Rotate MongoDB/Redis credentials: update `MONGODB_URI`/`REDIS_URL`, restart,
   verify readiness, then revoke the old credential.
 
-## 11. Scaling
+## 12. Scaling
 
 - **Today:** one app instance is the correct size (process-local WS state).
 - WebSocket connections are long-lived; size the instance on open
   connections (`WS_MAX_CONNECTIONS=1000` cap is per-process) and on Redis ops.
 - To scale horizontally later: externalize presence/registry/rate-limit state
-  (Phase 12) and then run N instances behind sticky-load-balanced WSS.
+  and then run N instances behind sticky-load-balanced WSS.
 
-## 12. Rollback
+## 13. Rollback
 
 - Because deploys are immutable images, rollback = redeploy the previous
   tagged image (same env config). Runtime migrations are forward-compatible
   (idempotent index creation), so older images tolerate newer data.
 - If a bad deploy changed schema irreversibly, restore from the §7 backups.
 
-## 13. Local development stack (for reference)
+## 14. Local development stack (for reference)
 
 `docker compose up --build` starts a disposable MongoDB + Redis + backend.
 Throwing away any of this state is trivial: `docker compose down -v`. See

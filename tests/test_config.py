@@ -192,6 +192,9 @@ def test_ws_settings_defaults(monkeypatch):
     s = load(monkeypatch)
     assert s.ws_auth_timeout_seconds == 10.0
     assert s.ws_max_connections == 1000
+    assert s.ws_max_connections_per_ip == 20
+    assert s.ws_idle_timeout_seconds == 180.0
+    assert s.ws_keepalive_seconds == 30.0
     assert s.ws_presence_ttl_seconds == 300
     assert s.ws_connect_rate_per_minute == 60
     assert s.ws_message_rate_per_minute == 120
@@ -202,12 +205,18 @@ def test_ws_settings_env_overrides(monkeypatch):
         monkeypatch,
         WS_AUTH_TIMEOUT_SECONDS="5",
         WS_MAX_CONNECTIONS="50",
+        WS_MAX_CONNECTIONS_PER_IP="5",
+        WS_IDLE_TIMEOUT_SECONDS="90",
+        WS_KEEPALIVE_SECONDS="15",
         WS_PRESENCE_TTL_SECONDS="120",
         WS_CONNECT_RATE_PER_MINUTE="30",
         WS_MESSAGE_RATE_PER_MINUTE="10",
     )
     assert s.ws_auth_timeout_seconds == 5.0
     assert s.ws_max_connections == 50
+    assert s.ws_max_connections_per_ip == 5
+    assert s.ws_idle_timeout_seconds == 90.0
+    assert s.ws_keepalive_seconds == 15.0
     assert s.ws_presence_ttl_seconds == 120
     assert s.ws_connect_rate_per_minute == 30
     assert s.ws_message_rate_per_minute == 10
@@ -218,6 +227,9 @@ def test_ws_settings_env_overrides(monkeypatch):
     [
         {"WS_AUTH_TIMEOUT_SECONDS": "0"},
         {"WS_MAX_CONNECTIONS": "0"},
+        {"WS_MAX_CONNECTIONS_PER_IP": "-1"},
+        {"WS_IDLE_TIMEOUT_SECONDS": "-1"},
+        {"WS_KEEPALIVE_SECONDS": "-1"},
         {"WS_PRESENCE_TTL_SECONDS": "10"},
         {"WS_CONNECT_RATE_PER_MINUTE": "0"},
         {"WS_MESSAGE_RATE_PER_MINUTE": "0"},

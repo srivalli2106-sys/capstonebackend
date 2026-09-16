@@ -70,23 +70,30 @@ class KeyService:
         """Return the bundle as a hex-encoded response dict, consuming the OPK.
 
         The OPK is consumed through the repository's atomic
-        ``find_one_and_update`` (single-use, concurrency-safe); the bundle is
-        then re-read for the response. Exactly one OPK is ever handed out.
+        ``find_one_and_update`` (single-use, concurrency-safe): exactly one of
+        any concurrent fetches receives the available prekey and serves it in
+        the response; every other caller sees ``None``. The other bundle
+        fields are read once, before consumption (consumption only nulls the
+        one-time prekey).
+
+        The peer's registered Ed25519 auth identity (``ik_public``) rides along
+        so the X3DH initiator can verify the signed prekey (Phase 13).
         """
         bundle = await self._keys.get_key_bundle(target_user_id)
         if bundle is None:
             raise ResourceNotFound("Key bundle not found")
+        user = await self._users.get_user(target_user_id)
+        if user is None:
+            raise ResourceNotFound("Key bundle not found")
 
-        await self._keys.consume_opk(target_user_id)
-        bundle = await self._keys.get_key_bundle(target_user_id)
+        opk_public = await self._keys.consume_opk(target_user_id)
 
         return {
             "user_id": bundle["user_id"],
+            "ik_public": user["ik_public"].hex(),
             "spk_public": bundle["spk_public"].hex(),
             "spk_sig": bundle["spk_sig"].hex(),
-            "opk_public": (
-                bundle["opk_public"].hex() if bundle.get("opk_public") else None
-            ),
+            "opk_public": opk_public.hex() if opk_public is not None else None,
             "version": bundle.get("version", 1),
         }
 

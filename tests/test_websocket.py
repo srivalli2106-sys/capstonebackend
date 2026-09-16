@@ -44,8 +44,46 @@ def _auth(token: str) -> str:
     return json.dumps({"type": "auth", "token": token})
 
 
-def _msg(to: str, data: str) -> str:
-    return json.dumps({"to": to, "data": data})
+def _msg(
+    to: str, data: str, *, mid: str | None = None, mtype: str = "text"
+) -> str:
+    from server.message_id import new_message_id
+
+    return json.dumps(
+        {
+            "id": mid or new_message_id(),
+            "type": mtype,
+            "recipient": to,
+            "data": data,
+        }
+    )
+
+
+def _envelope(*, mid: str, mtype: str, sender: str, recipient: str, data: str):
+    """Build the server-authoritative envelope a client would receive."""
+    return {
+        "version": 1,
+        "id": mid,
+        "type": mtype,
+        "sender": sender,
+        "recipient": recipient,
+        "data": data,
+    }
+
+
+def _assert_relayed(received: dict, sender: str, recipient: str, data: str) -> str:
+    parsed = dict(received)
+    timestamp = parsed.pop("timestamp")
+    mid = parsed.pop("id")
+    assert parsed == {
+        "version": 1,
+        "type": "text",
+        "sender": sender,
+        "recipient": recipient,
+        "data": data,
+    }
+    assert isinstance(timestamp, int)
+    return mid
 
 
 def _signed(payload: dict) -> str:
@@ -74,8 +112,10 @@ def ws_env(monkeypatch):
     monkeypatch.setattr(ws_auth, "settings", SimpleNamespace(
         ws_auth_timeout_seconds=10.0,
         ws_presence_ttl_seconds=300,
+        ws_idle_timeout_seconds=180.0,
+        ws_keepalive_seconds=60.0,
     ))
-    monkeypatch.setattr(ws_registry, "registry", WsRegistry(20))
+    monkeypatch.setattr(ws_registry, "registry", WsRegistry(20, max_connections_per_ip=20))
 
     async def _allow(*args, **kwargs):
         return True
@@ -253,26 +293,40 @@ def test_ws_ignores_query_string_token(client: TestClient, ws_env):
     with client.websocket_connect("/ws?token=stale-token") as ws:
         ws.send_text(_auth("any-token"))
         ws.send_text(_msg("alice", "blob"))
-        assert json.loads(ws.receive_text()) == {"from": "alice", "data": "blob"}
+        _assert_relayed(json.loads(ws.receive_text()), "alice", "alice", "blob")
 
 
 def test_ws_authenticates_and_relays(client: TestClient, ws_env):
     with client.websocket_connect("/ws") as ws:
         ws.send_text(_auth("jwt-abc"))
         ws.send_text(_msg("alice", "blob"))
-        assert json.loads(ws.receive_text()) == {"from": "alice", "data": "blob"}
+        _assert_relayed(json.loads(ws.receive_text()), "alice", "alice", "blob")
 
 
 def test_ws_flushes_pending_messages_on_connect(client: TestClient, ws_env, monkeypatch):
     from server.repositories.message_repository import message_repository
 
     async def _pending(user_id):
-        return [json.dumps({"from": "bob", "data": "queued"})]
+        return [
+            json.dumps(
+                _envelope(
+                    mid="0" * 26,
+                    mtype="text",
+                    sender="bob",
+                    recipient="alice",
+                    data="queued",
+                )
+                | {"timestamp": 1750000000000}
+            )
+        ]
 
     monkeypatch.setattr(message_repository, "dequeue_all_messages", _pending)
     with client.websocket_connect("/ws") as ws:
         ws.send_text(_auth("jwt-abc"))
-        assert json.loads(ws.receive_text()) == {"from": "bob", "data": "queued"}
+        env = json.loads(ws.receive_text())
+        assert env["sender"] == "bob"
+        assert env["recipient"] == "alice"
+        assert env["data"] == "queued"
 
 
 def test_ws_queues_message_when_recipient_offline(client: TestClient, ws_env, monkeypatch):
@@ -293,10 +347,13 @@ def test_ws_queues_message_when_recipient_offline(client: TestClient, ws_env, mo
         ws.send_text(_auth("jwt-abc"))
         ws.send_text(_msg("bob", "blob-1"))
         ws.send_text(_msg("bob", "blob-2"))
-    assert queued == [
-        ("bob", json.dumps({"from": "alice", "data": "blob-1"})),
-        ("bob", json.dumps({"from": "alice", "data": "blob-2"})),
-    ]
+
+    assert [q[0] for q in queued] == ["bob", "bob"]
+    datas = [json.loads(payload)["data"] for _, payload in queued]
+    assert datas == ["blob-1", "blob-2"]
+    for _, payload in queued:
+        env = json.loads(payload)
+        _assert_relayed(env, "alice", "bob", env["data"])
 
 
 def test_ws_marks_user_online_after_auth(client: TestClient, ws_env, monkeypatch):
@@ -327,7 +384,7 @@ def test_ws_drops_binary_messages_after_auth(client: TestClient, ws_env):
         ws.send_text(_auth("jwt-abc"))
         ws.send_bytes(b"\x00\x01")
         ws.send_text(_msg("alice", "ok"))
-        assert json.loads(ws.receive_text()) == {"from": "alice", "data": "ok"}
+        _assert_relayed(json.loads(ws.receive_text()), "alice", "alice", "ok")
 
 
 def test_ws_closes_oversized_message(client: TestClient, ws_env):
@@ -352,10 +409,10 @@ def test_ws_drops_rate_limited_messages(client: TestClient, ws_env, monkeypatch)
     with client.websocket_connect("/ws") as ws:
         ws.send_text(_auth("jwt-abc"))
         ws.send_text(_msg("alice", "one"))
-        assert json.loads(ws.receive_text()) == {"from": "alice", "data": "one"}
+        _assert_relayed(json.loads(ws.receive_text()), "alice", "alice", "one")
         ws.send_text(_msg("alice", "two"))  # dropped
         ws.send_text(_msg("alice", "three"))
-        assert json.loads(ws.receive_text()) == {"from": "alice", "data": "three"}
+        _assert_relayed(json.loads(ws.receive_text()), "alice", "alice", "three")
 
 
 # ---------------------------------------------------------------------------
@@ -374,7 +431,7 @@ def test_ws_takeover_closes_previous_connection(client: TestClient, ws_env):
             assert exc.value.reason == "Replaced by new connection"
             # The replacement is fully functional.
             ws2.send_text(_msg("alice", "blob"))
-            assert json.loads(ws2.receive_text()) == {"from": "alice", "data": "blob"}
+            _assert_relayed(json.loads(ws2.receive_text()), "alice", "alice", "blob")
 
 
 def test_ws_takeover_does_not_clear_presence_of_replacement(
@@ -434,7 +491,56 @@ def test_ws_refuses_at_capacity(client: TestClient, ws_env, monkeypatch):
         # ws1 is still usable after the refusal.
         ws1.send_text(_auth("jwt-abc"))
         ws1.send_text(_msg("alice", "solo"))
-        assert json.loads(ws1.receive_text()) == {"from": "alice", "data": "solo"}
+        _assert_relayed(json.loads(ws1.receive_text()), "alice", "alice", "solo")
+
+
+# ---------------------------------------------------------------------------
+# Phase 12: idle timeout + per-IP connection budget
+# ---------------------------------------------------------------------------
+
+
+def test_ws_closes_idle_connection(client: TestClient, ws_env, monkeypatch):
+    monkeypatch.setattr(ws_auth, "settings", SimpleNamespace(
+        ws_auth_timeout_seconds=10.0,
+        ws_presence_ttl_seconds=300,
+        ws_idle_timeout_seconds=0.05,
+    ))
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect("/ws") as ws:
+            ws.send_text(_auth("jwt-abc"))
+            ws.receive_text()  # never sends an application frame again
+    assert exc.value.code == 4008
+    assert exc.value.reason == "Idle timeout"
+
+
+def test_ws_active_connection_survives_idle_timeout(client: TestClient, ws_env, monkeypatch):
+    monkeypatch.setattr(ws_auth, "settings", SimpleNamespace(
+        ws_auth_timeout_seconds=10.0,
+        ws_presence_ttl_seconds=300,
+        ws_idle_timeout_seconds=0.05,
+    ))
+    with client.websocket_connect("/ws") as ws:
+        ws.send_text(_auth("jwt-abc"))
+        ws.send_text(_msg("alice", "ping-1"))
+        _assert_relayed(json.loads(ws.receive_text()), "alice", "alice", "ping-1")
+        ws.send_text(_msg("alice", "ping-2"))
+        _assert_relayed(json.loads(ws.receive_text()), "alice", "alice", "ping-2")
+
+
+def test_ws_refuses_beyond_per_ip_cap(client: TestClient, ws_env, monkeypatch):
+    from server import ws_registry
+    from server.ws_registry import WsRegistry
+
+    monkeypatch.setattr(ws_registry, "registry", WsRegistry(100, max_connections_per_ip=1))
+    with client.websocket_connect("/ws") as ws1:
+        ws1.send_text(_auth("jwt-abc"))
+        with pytest.raises(WebSocketDisconnect) as exc:
+            with client.websocket_connect("/ws"):
+                pass  # same address, cap already reached
+        assert exc.value.code == 1013
+        assert exc.value.reason == "Server at capacity"
+        ws1.send_text(_msg("alice", "still-alive"))
+        _assert_relayed(json.loads(ws1.receive_text()), "alice", "alice", "still-alive")
 
 
 def test_ws_never_logs_token_or_payload(client: TestClient, ws_env, caplog):
@@ -443,10 +549,9 @@ def test_ws_never_logs_token_or_payload(client: TestClient, ws_env, caplog):
         with client.websocket_connect("/ws") as ws:
             ws.send_text(_auth(secret_token))
             ws.send_text(_msg("alice", "super-secret-plaintext-999"))
-            assert json.loads(ws.receive_text()) == {
-                "from": "alice",
-                "data": "super-secret-plaintext-999",
-            }
+            env = json.loads(ws.receive_text())
+            assert env["sender"] == "alice"
+            assert env["data"] == "super-secret-plaintext-999"
 
     combined = "\n".join(r.getMessage() for r in caplog.records)
     assert secret_token not in combined

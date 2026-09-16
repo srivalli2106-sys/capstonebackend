@@ -22,7 +22,7 @@ class _Users:
         self.registered = registered
 
     async def get_user(self, user_id: str) -> dict | None:
-        return {"user_id": user_id} if self.registered else None
+        return _user(user_id) if self.registered else None
 
     async def register_user(self, user_id: str, ik_public: bytes) -> bool:
         raise NotImplementedError
@@ -55,6 +55,10 @@ def _bundle(opk=None, version=1):
         "opk_public": opk,
         "version": version,
     }
+
+
+def _user(bundle_owner_id: str) -> dict:
+    return {"user_id": bundle_owner_id, "ik_public": b"\xaa" * 32}
 
 
 # ---------------------------------------------------------------------------
@@ -135,13 +139,14 @@ async def test_get_bundle_returns_hex_dict_and_consumes_opk_once():
 
     assert result == {
         "user_id": "carol",
+        "ik_public": "aa" * 32,
         "spk_public": "cd" * 32,
         "spk_sig": "ef" * 32,
-        "opk_public": None,
+        "opk_public": "77" * 32,
         "version": 1,
     }
-    # OPK consumed exactly once between the first read and the response, so a
-    # fetch hands out the key zero times (it is consumed, then re-read).
+    # OPK consumed exactly once: the winning fetch serves the fresh prekey and
+    # leaves the stored value null so later fetches get nothing.
     assert keys.consumed == ["carol"]
     assert keys.bundle["opk_public"] is None
 
@@ -153,6 +158,26 @@ async def test_get_bundle_without_opk_returns_none():
     result = await svc.get_bundle("carol")
 
     assert result["opk_public"] is None
+
+
+async def test_get_bundle_serves_opk_exactly_once():
+    keys = _Keys(bundle=_bundle(opk=b"\x77" * 32))
+    svc = KeyService(users=_Users(), keys=keys)
+
+    first = await svc.get_bundle("carol")
+    second = await svc.get_bundle("carol")
+
+    assert first["opk_public"] == "77" * 32
+    assert second["opk_public"] is None
+    assert keys.consumed == ["carol", "carol"]
+
+
+async def test_get_bundle_missing_user_raises_not_found():
+    keys = _Keys(bundle=_bundle(opk=None))
+    svc = KeyService(users=_Users(registered=False), keys=keys)
+    with pytest.raises(ResourceNotFound) as exc:
+        await svc.get_bundle("carol")
+    assert exc.value.message == "Key bundle not found"
 
 
 # ---------------------------------------------------------------------------

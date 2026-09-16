@@ -1,14 +1,18 @@
 """
-messages.py — WebSocket relay for encrypted message delivery (Phase 7).
+messages.py — WebSocket relay for encrypted message delivery (Phase 7/11).
 
 Handshake (no query-string token):
   1. Client connects to /ws and sends, as its FIRST frame:
      {"type": "auth", "token": "<JWT>"}
   2. Server validates the token (signature/algorithm/issuer/expiry + Redis
      revocation, fail closed) and marks the user online.
-  3. Client then sends: {"to": "<user_id>", "data": "<base64 payload>"}
-  4. Server forwards to recipient if online, else queues in Redis.
-  5. On connect, the server flushes any pending queued messages.
+  3. Client then sends a message envelope (see :mod:`server.envelope`):
+     {"id": "<message id>", "type": "<type>", "recipient": "<user_id>",
+      "data": "<base64 payload>"}
+  4. Server validates the envelope, stamps it server-authoritative
+     (sender/timestamp/version), deduplicates by id, and forwards to the
+     recipient if online, else queues in Redis.
+  5. On connect, the server flushes any pending queued envelopes.
 
 Connection lifecycle is enforced by :mod:`server.ws_registry` (per-process
 budget + per-user takeover) and :mod:`server.ws_auth` (auth timeout, token
@@ -30,6 +34,7 @@ import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from .. import ws_auth, ws_registry
+from ..config import settings
 from ..services.message_service import MAX_WS_MESSAGE_CHARS, message_service
 from ..services.presence_service import presence_service
 
@@ -55,6 +60,7 @@ async def websocket_endpoint(ws: WebSocket):
     client_ip = ws.client.host if ws.client else "unknown"
     tasks: list[asyncio.Task] = []
     slot_reserved = False
+    ip_reserved = False
     registered = False
     user_id: str | None = None
 
@@ -67,6 +73,15 @@ async def websocket_endpoint(ws: WebSocket):
             )
             return
         slot_reserved = True
+
+        # Per-IP connection cap (pre-auth, best-effort). Refusals reuse the
+        # capacity close code/reason so the peer sees no per-IP policy detail.
+        if not await ws_registry.registry.try_register_ip(client_ip):
+            await ws_registry.close_websocket(
+                ws, ws_auth.WS_CAPACITY, ws_auth.REASON_CAPACITY
+            )
+            return
+        ip_reserved = True
 
         if not await ws_auth.allow_ws_connect(client_ip):
             await ws_registry.close_websocket(
@@ -104,22 +119,37 @@ async def websocket_endpoint(ws: WebSocket):
         # Flush any pending messages that arrived while offline.
         await message_service.flush_pending(user_id, ws)
 
-        # Background guards: token lifetime (expiry/revocation) and presence
-        # keep-alive. Both are cancelled on disconnect in the finally block.
+        # Background guards: token lifetime (expiry/revocation), presence
+        # keep-alive and (optionally) ping keepalive. All are cancelled on
+        # disconnect in the finally block.
         tasks.append(ws_auth.close_on_token_expiry(ws, claims))
         tasks.append(
             asyncio.create_task(
                 presence_service.keep_alive(user_id, conn_id, _current_conn_id)
             )
         )
+        if settings.ws_keepalive_seconds > 0:
+            # Server-initiated pings keep healthy idle connections alive: their
+            # answering pongs reset the idle window below. Best-effort: dies
+            # quietly with the socket.
+            tasks.append(
+                asyncio.create_task(
+                    ws_auth.keepalive_ping(ws, settings.ws_keepalive_seconds)
+                )
+            )
 
         while True:
-            event = await ws_auth.receive_ws_event(ws)
+            # Idle connections (no application frame within the configured
+            # window) are condemned 4008; the receive is cancelled on timeout.
+            event = await ws_auth.receive_ws_event_with_idle_timeout(ws)
             if event is None:
                 break
             kind, value = event
             if kind == "disconnect":
                 break
+            if kind in ("ping", "pong"):
+                # Control keepalive: counted as activity, never a message.
+                continue
             if kind == "bytes":
                 # Binary frames are unsupported; drop without closing.
                 continue
@@ -161,4 +191,6 @@ async def websocket_endpoint(ws: WebSocket):
 
         if slot_reserved:
             await ws_registry.registry.release_slot()
+        if ip_reserved:
+            await ws_registry.registry.release_ip(client_ip)
         logger.info("[WS] disconnected conn_id=%s user_id=%s", conn_id, user_id)

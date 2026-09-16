@@ -20,7 +20,7 @@ jobs:
       - name: Install ruff
         run: pip install ruff==0.6.9
       - name: Run ruff
-        run: ruff check server tests
+        run: ruff check server tests protocol
 
   unit-tests:
     name: Unit tests
@@ -39,7 +39,7 @@ jobs:
           pip install -r requirements-dev.txt
       - name: Run unit tests (with coverage)
         run: |
-          pytest -m "not integration" --cov=server --cov-report=term-missing --cov-report=xml:coverage.xml
+          pytest -m "not integration" --cov=server --cov=protocol --cov-report=term-missing --cov-report=xml:coverage.xml
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
         with:

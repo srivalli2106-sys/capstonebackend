@@ -99,13 +99,15 @@ def test_keys_upload_fetch_and_opk_consumption(client):
     assert upload.status_code == 200
     assert upload.json() == {"status": "ok", "user_id": uid}
 
-    # Fetching the bundle consumes the OPK (it is no longer returned).
+    # Fetching the bundle consumes the OPK and serves it exactly once: the
+    # response carries the fresh one-time prekey, the store is left null, and
+    # any later fetch/status call sees it as consumed.
     bundle = client.get(f"/keys/bundle/{uid}", headers=headers)
     assert bundle.status_code == 200
     body = bundle.json()
     assert body["user_id"] == uid
     assert body["spk_public"] == SPK
-    assert body["opk_public"] is None
+    assert body["opk_public"] == OPK
 
     # Re-fetch still works.
     assert client.get(f"/keys/bundle/{uid}", headers=headers).status_code == 200

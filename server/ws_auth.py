@@ -60,6 +60,7 @@ WS_CAPACITY = 1013
 WS_REPLACED = 4000
 WS_AUTH_REQUIRED = 4001
 WS_POLICY_VIOLATION = 4003
+WS_IDLE_TIMEOUT = 4008
 
 REASON_AUTH_FAILED = "Authentication failed"
 REASON_AUTH_TIMEOUT = "Authentication timed out"
@@ -70,6 +71,7 @@ REASON_TOO_LARGE = "Message too large"
 REASON_CAPACITY = "Server at capacity"
 REASON_RATE_LIMITED = "Rate limit exceeded"
 REASON_POLICY = "Policy violation"
+REASON_IDLE_TIMEOUT = "Idle timeout"
 
 
 class WsAuthError(Exception):
@@ -94,9 +96,12 @@ def new_connection_id() -> str:
 async def receive_ws_event(ws: WebSocket) -> tuple[str, object] | None:
     """Translate a raw ASGI websocket message into (kind, value).
 
-    Returns ``("text", str)``, ``("bytes", bytes)``, ``("disconnect", code)``
-    or None for anything unexpected. The caller owns the connection and is
-    the only receiver, so no unexpected messages should occur after accept.
+    Returns ``("text", str)``, ``("bytes", bytes)``, ``("ping", None)``,
+    ``("pong", None)``, ``("disconnect", code)`` or None for anything
+    unexpected. Ping/pong are control keepalive events: the caller treats
+    them as activity (they reset the idle window) and never as messages.
+    The caller owns the connection and is the only receiver, so no unexpected
+    messages should occur after accept.
     """
     message = await ws.receive()
     mtype = message.get("type")
@@ -106,9 +111,52 @@ async def receive_ws_event(ws: WebSocket) -> tuple[str, object] | None:
         if "bytes" in message:
             return ("bytes", message["bytes"])
         return None
+    if mtype == "websocket.ping":
+        return ("ping", None)
+    if mtype == "websocket.pong":
+        return ("pong", None)
     if mtype == "websocket.disconnect":
         return ("disconnect", message.get("code", WS_NORMAL_CLOSE))
     return None
+
+
+async def keepalive_ping(ws: WebSocket, interval: float) -> None:
+    """Send a server-initiated ping every ``interval`` seconds until the
+    socket dies. A WebSocket peer answers pings automatically (protocol
+    level); healthy idle connections therefore keep producing pongs that
+    reset the route's idle window, and NAT/proxy tunnels stay warm. Errors
+    mean the socket is gone: the task exits silently. An interval <= 0 is a
+    no-op (keepalive disabled).
+    """
+    if interval <= 0:
+        return
+    while True:
+        await _sleep(interval)
+        try:
+            await ws.send({"type": "websocket.ping"})
+        except Exception:
+            return
+
+
+async def receive_ws_event_with_idle_timeout(
+    ws: WebSocket,
+) -> tuple[str, object] | None:
+    """Like :func:`receive_ws_event`, but bounded by the idle timeout.
+
+    A connection that sends no application frame within
+    ``ws_idle_timeout_seconds`` is condemned: the route closes it (4008).
+    ``wait_for`` cancels the pending receive, so a timed-out receive cannot
+    later deliver a stale frame to a different owner.
+    """
+    timeout = settings.ws_idle_timeout_seconds
+    if timeout > 0:
+        try:
+            return await asyncio.wait_for(
+                receive_ws_event(ws), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            raise WsAuthError(WS_IDLE_TIMEOUT, REASON_IDLE_TIMEOUT) from None
+    return await receive_ws_event(ws)
 
 
 def parse_auth_frame(raw: str) -> str:

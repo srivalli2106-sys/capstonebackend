@@ -9,7 +9,8 @@ POST /keys/upload
 GET /keys/bundle/{user_id}
   - Auth required (JWT)
   - Returns the key bundle for user_id
-  - Consumes the OPK (sets it to None in DB)
+  - Consumes the OPK (sets it to None in DB); the response carries the
+    just-consumed one-time prekey (single-use, delivered to exactly one caller)
   - Returns 404 if user not found
 
 GET /keys/prekeys/{user_id}
@@ -49,6 +50,7 @@ class UploadKeyBundleRequest(BaseModel):
 
 class KeyBundleResponse(BaseModel):
     user_id: str
+    ik_public: str  # hex — registered Ed25519 auth identity (verifies spk_sig)
     spk_public: str   # hex
     spk_sig: str      # hex
     opk_public: str | None = None  # hex

@@ -35,6 +35,7 @@ class _FakeKeyService:
             raise ResourceNotFound("Key bundle not found")
         return {
             "user_id": target_user_id,
+            "ik_public": _IK,
             "spk_public": _SPK,
             "spk_sig": _SIG,
             "opk_public": _OPK,
@@ -95,6 +96,7 @@ def test_get_bundle_returns_response_shape(client, monkeypatch):
     assert resp.status_code == 200
     assert resp.json() == {
         "user_id": "carol",
+        "ik_public": _IK,
         "spk_public": _SPK,
         "spk_sig": _SIG,
         "opk_public": _OPK,
