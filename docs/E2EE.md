@@ -7,6 +7,12 @@ and the package's unit tests.
 
 > ⚠️ Security note: this is a reference implementation for a learning / demo
 > project. It is **not** an audited, production-grade cryptographic library.
+>
+> This repository provides **protocol/server-side support, not a complete
+> client application**: the server stores/serves the key material, relays the
+> ciphertext, and the `protocol/` package pins the crypto behavior. The actual
+> encrypt-on-device client is **out of scope** for this backend and is not
+> present in this repository. No launchable, audited client exists today.
 
 ---
 
@@ -43,10 +49,14 @@ opk_publics      (one or more 32-byte one-time prekeys)
 ```
 
 Server integration (`/keys/upload`, `/keys/bundle/{user_id}`): the SPK, its
-signature, and a single OPK are uploaded and stored; fetching a bundle
-consumes the OPK atomically so each fetch yields a fresh one-time prekey.
-The bundle also exposes the registered `ik_public` (from the users
-collection) so the initiator can verify `spk_signature`.
+signature, and a single OPK are uploaded and stored; fetching a bundle consumes
+the OPK atomically and **serves the freshly yielded prekey** to exactly one
+caller (subsequent fetches see `None`), so each X3DH init can use a fresh
+one-time prekey. The bundle also exposes the registered `ik_public` (from the
+users collection) so the initiator can verify `spk_signature`. The served
+bundle mirrors `KeyBundle` minus `xdh_public`: the X3DH identity `IKX` is
+**not** stored or served by this backend — the client layer must supply/carry
+it out-of-band (it is needed to compute `DH(EK_A, IKX_B)`).
 
 ## 3. X3DH setup (`protocol/x3dh.py`)
 
@@ -138,7 +148,7 @@ header bytes are authenticated, so `dh`/`pn`/`n` cannot be tampered with.
 
 | Method | Use |
 |--------|-----|
-| `E2EESession.initiate(local=DeviceKeys, remote_bundle=KeyBundle, opk_index=...)` | Alice: build a sender session; returns the session whose `.init_payload` is the `session_init` frame. |
+| `E2EESession.initiate(our_xdh_private, our_auth_ik_public, remote_bundle, opk_index)` | Alice: build a sender session; returns the session whose `.init_payload` is the `session_init` frame. |
 | `E2EESession.accept(local=DeviceKeys, init_payload=bytes)` | Bob: build the receiving session from an init frame. |
 | `encrypt_message(plaintext, extra_ad=b"")` | `data = session_ad || extra_ad` becomes the AEAD AD; returns wire message. |
 | `decrypt_message(wire, extra_ad=b"")` | Returns plaintext or raises `DecryptionError`. |
@@ -168,5 +178,15 @@ message `id`, sender/recipient) into the AEAD.
 - **Replay:** message indices + per-turn DH publics; older message keys are
   dropped rather than accepted. Application-level idempotency additionally
   uses the 26-char ULID message id.
-- **Audit state:** this package is the current best-effort reference; a
-  production deployment must commission an independent crypto review.
+- **Protocol versions:** every serialized object is versioned and validated on
+  load — X3DH init frame (`version 1`), ratchet message (`version 1`), ratchet
+  state (`version 1`), and session state (`version 1`) all reject unknown
+  versions so a mixed-version peer fails loudly instead of misbehaving.
+- **Security boundaries:**
+  - The server never decrypts, inspects, or logs message content; `data` is
+    opaque to it.
+  - No private key material is ever stored or transmitted by this backend; all
+    private crypto state lives on devices.
+  - The server's single-use OPK consumption bounds replay of X3DH prekeys.
+  - A production deployment must commission an independent crypto review;
+    nothing in this repository is a substitute for one.

@@ -48,20 +48,26 @@ capstonebackend/
 ├── server/                  ← The backend
 │   ├── app.py               ← Entry point; wires routes, CORS, lifespan
 │   ├── config.py            ← Centralized configuration (env / .env, validated)
-│   ├── db.py                ← MongoDB (users + key bundles)
-│   ├── middleware.py        ← JWT auth + rate limiting
-│   ├── redis_client.py      ← Online status + offline message queue
+│   ├── db.py                ← MongoDB (users + key bundles, atomic OPK consume)
+│   ├── middleware.py        ← Security headers, request ids, CORS, host validation
+│   ├── jwt_auth.py          ← JWT issue/verify (pinned algorithm, issuer, revocation)
+│   ├── auth_service.py      ← Login flow, proof-of-possession, rate limits,
+│   │                            require_auth dependency
+│   ├── ws_auth.py           ← WebSocket first-frame auth + session watcher
+│   ├── ws_registry.py       ← Connection budget, per-IP caps, user↔socket map, takeover
+│   ├── envelope.py          ← Message envelope validation
+│   ├── redis_client.py      ← Presence, offline queue, revocation, rate limits
+│   ├── services/            ← message_service, presence_service, key_service, user_service
+│   ├── repositories/        ← user_repository, key_repository (+ Fake* for tests)
 │   └── routes/
-│       ├── auth.py          ← One-time registration + login
-│       ├── keys.py          ← Key bundle upload / fetch / one-time key
-│       └── messages.py      ← WebSocket relay for encrypted messages
+│       ├── auth.py          ← register / challenge / verify / login(dev) / logout
+│       ├── keys.py          ← key bundle upload / fetch / prekey status
+│       └── messages.py      ← WebSocket relay (envelope) + message rate limit
 │
 ├── protocol/                ← E2EE reference implementation (X3DH + Double Ratchet)
-├── tests/                   ← pytest suite (unit + integration)
-├── docs/DEPLOYMENT.md       ← production deployment & operations guide
-├── docs/E2EE.md             ← end-to-end encryption protocol spec
-├── docs/PROTOCOL.md         ← message envelope & wire protocol spec
-├── .github/workflows/       ← CI (ruff, unit tests, integration tests, Docker build)
+├── tests/                   ← pytest suite (unit + integration, opt-in)
+├── docs/                    ← the 12-doc runbook described below
+├── .github/workflows/       ← CI (ruff, unit tests, Docker build, integration tests)
 ├── Dockerfile               ← production image (non-root, no secrets baked in)
 ├── docker-compose.yml       ← disposable local dev stack (backend + Mongo + Redis)
 ├── requirements.txt         ← Runtime dependencies (pinned)
@@ -73,6 +79,25 @@ capstonebackend/
 
 ---
 
+## 📚 Documentation (start here)
+
+| Doc | Covers |
+|-----|--------|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Project structure, layering, request flows, error contract |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Local setup, run, and test **commands** |
+| [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) | Every env var: purpose, default, validation, prod fail-fast |
+| [docs/DATABASE.md](docs/DATABASE.md) | MongoDB + Redis schemas, indexes, connection lifecycle |
+| [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) | Challenge/verify proof of possession, JWT, revocation |
+| [docs/WEBSOCKET.md](docs/WEBSOCKET.md) | `/ws` lifecycle, guards, delivery, presence, scaling limits |
+| [docs/PROTOCOL.md](docs/PROTOCOL.md) | Message envelope, ULID ids, message-type catalog, semantics |
+| [docs/E2EE.md](docs/E2EE.md) | X3DH + Double Ratchet crypto design (protocol reference) |
+| [docs/TESTING.md](docs/TESTING.md) | Test layout, commands, CI behavior |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Production deployment guide (Render) |
+| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Symptom → cause → fix table |
+| [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | Git workflow, branch naming, PR expectations |
+
+---
+
 ## API endpoints (as implemented)
 
 | Method | Path                          | Auth | Description                                   |
@@ -80,11 +105,17 @@ capstonebackend/
 | GET    | `/health`                     | —    | Liveness probe → `{"status": "ok"}`           |
 | GET    | `/health/ready`               | —    | Readiness probe → `200 {"status":"ready"}` / `503 {"status":"unavailable"}` |
 | POST   | `/auth/register`              | —    | One-time registration (user_id + identity key)|
-| POST   | `/auth/login`                 | —    | Returns a JWT for authenticated requests      |
+| POST   | `/auth/challenge`             | —    | Get a PoP nonce (production login step 1)     |
+| POST   | `/auth/verify`                | —    | Complete login by signing the nonce (validation active only in dev/test; production requires a real Ed25519 signature) |
+| POST   | `/auth/login`                 | —    | Dev/test convenience login; **returns 403 in production** |
+| POST   | `/auth/logout`                | JWT  | Revoke the current token                      |
 | POST   | `/keys/upload`                | JWT  | Upload signed prekey + one-time prekey        |
 | GET    | `/keys/bundle/{user_id}`      | JWT  | Fetch a user's key bundle (consumes OPK)      |
 | GET    | `/keys/prekeys/{user_id}`     | JWT  | OPK availability status                       |
 | WS     | `/ws`                        | JWT  | Real-time envelope relay (first-frame `{"type":"auth","token":"..."}`, then `{"id","type","recipient","data"}`); idle timeout, keepalive pings, per-IP cap |
+
+> The `/auth/verify` and `/auth/challenge` PoP flow is documented in
+> [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md).
 
 Interactive docs: **http://localhost:8000/docs** (Swagger UI).
 
@@ -178,10 +209,10 @@ docker compose down -v   # -v also deletes the throwaway Mongo data volume
 
 ## 📦 Deploying
 
-See **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** — a provider-neutral guide to
-production configuration, the Docker image, health checks (liveness vs.
-readiness), reverse-proxy/TLS requirements, MongoDB & Redis security, backups,
-secrets management, scaling, and rollback.
+See **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** — the production deployment &
+operations guide for **Render** (native Python or Docker), MongoDB Atlas,
+Redis, health checks, secrets, HTTPS/WSS, logs, rollback, and the current
+single-instance scaling rule.
 
 ---
 
