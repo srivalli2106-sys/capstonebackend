@@ -83,7 +83,7 @@ Three files/layers exist:
 
 | Variable | Req. | Purpose | Default | Validation |
 |----------|------|---------|---------|------------|
-| `CORS_ORIGINS` | prod | Comma-separated allowed origins | `*` | Production rejects a bare `*` |
+| `CORS_ORIGINS` | prod | Comma-separated allowed origins (browser clients). Unset → `["*"]` (dev only). Empty value (no frontend yet) → `[]`. Explicit `*` → `["*"]` (rejected in production). | `*` (i.e. unset) | Production rejects `["*"]`; accepts a specific list or an explicit empty value |
 | `ALLOWED_HOSTS` | prod | Comma-separated allowed `Host` headers; `*` disables enforcement | `*` | Production rejects a bare `*` |
 | `SECURE_TRANSPORT` | prod | True when served over TLS (HTTPS/WSS); gates the HSTS header | `false` | Production requires `true` |
 
@@ -100,7 +100,13 @@ unless all of the following hold:
   - `change-me-to-a-long-random-string`
 - `MONGODB_URI` does **not** contain `USERNAME:PASSWORD` (the `.env.example`
   placeholder)
-- `CORS_ORIGINS` is a specific list, not `*`
+- `CORS_ORIGINS` is a specific list, **or** is left explicitly empty (no
+  frontend yet). The literal `*` is rejected. The three operator states are
+  preserved distinctly:
+    - unset (env var absent) → `["*"]`; rejected by the production check;
+    - empty value (`CORS_ORIGINS=`) → `[]` (secure: no browser cross-origin
+      traffic is allowed); **accepted**;
+    - one or more comma-separated origins → kept as-is; **accepted**.
 - `ALLOWED_HOSTS` is a specific list, not `*`
 - `SECURE_TRANSPORT=true`
 
@@ -110,7 +116,7 @@ Example safe production values (also see [DEPLOYMENT.md](DEPLOYMENT.md)):
 APP_ENV=production
 SECURE_TRANSPORT=true
 ALLOWED_HOSTS=secure-messaging.onrender.com
-CORS_ORIGINS=https://your-client.example.com
+CORS_ORIGINS=https://your-client.example.com   # or leave empty if no frontend
 JWT_SECRET=<generated>
 ```
 

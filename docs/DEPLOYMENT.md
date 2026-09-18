@@ -84,7 +84,7 @@ Set these in the Render **Environment** panel (as **secret** values):
 APP_ENV=production
 SECURE_TRANSPORT=true
 ALLOWED_HOSTS=<your-app>.onrender.com
-CORS_ORIGINS=https://<your-client-origin>
+CORS_ORIGINS=https://<your-client-origin>   # or leave empty if no frontend yet
 MONGODB_URI=mongodb+srv://<user>:<password>@<cluster>.mongodb.net/<db>?retryWrites=true&w=majority
 MONGODB_DB=secure_messaging
 REDIS_URL=redis://:<password>@<redis-host>:<port>/0
@@ -98,13 +98,17 @@ Optional tuning (see [ENVIRONMENT.md](ENVIRONMENT.md)): `AUTH_CHALLENGE_TTL_SECO
 `WS_*` limits, `MONGODB_*`/`REDIS_*` pool bounds, `JWT_EXPIRY_HOURS`.
 
 Production fail-fast validation (`APP_ENV=production`) refuses to start with
-placeholder JWT secrets, placeholder Mongo URIs, `CORS_ORIGINS=*`,
+placeholder JWT secrets, placeholder Mongo URIs, an explicit `CORS_ORIGINS=*`,
 `ALLOWED_HOSTS=*`, or `SECURE_TRANSPORT` off. If the service crashes in a loop
 at boot, that validation is the first thing to check (Render logs show the
 `ValueError` message).
 
 - **CORS**: set to the **exact** client origin(s) including scheme/port
-  (e.g. `https://app.example.com`). No `*`.
+  (e.g. `https://app.example.com`). If the deployment has no frontend yet,
+  set `CORS_ORIGINS=` to an explicitly empty value — this resolves to a
+  zero-length allow list (no browser cross-origin requests are permitted,
+  same-origin and non-browser traffic still works) and is **accepted** by
+  production validation. The literal `*` is rejected in production.
 - **ALLOWED_HOSTS**: the host header the app will receive — typically
   `<app>.onrender.com` (and your custom domain after the CNAME). If your proxy
   forwards a different public host, list that one.
@@ -204,7 +208,8 @@ request shows an `X-Request-ID` header and structured log lines.
 - Do not set `APP_ENV` to `development`/`test` in production (disables
   fail-fast validation and enables password-less `/auth/login`).
 - Do not use `CORS_ORIGINS=*` or `ALLOWED_HOSTS=*` in production (rejected
-  anyway by fail-fast).
+  anyway by fail-fast). If the deployment has no frontend yet, leave
+  `CORS_ORIGINS` set to an explicitly empty value — do **not** set `*`.
 - Do not point `MONGODB_URI`/`REDIS_URL` at development credentials, and never
   run local/test tooling against the production databases.
 - Do not run multiple workers/instances without externalizing process-local WS

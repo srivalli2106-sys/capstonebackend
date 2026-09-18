@@ -177,7 +177,16 @@ class Settings(BaseSettings):
 # ------------------------------------------------------------------
     # CORS
     # ------------------------------------------------------------------
-    cors_origins: str = Field(default="*", validation_alias="CORS_ORIGINS")
+    # Raw env value. ``None`` means the env var is unset; an explicit empty
+    # string ("") or whitespace-only value means the operator intentionally
+    # configured no origins (e.g. production with no frontend yet). The
+    # ``cors_origins_list`` property below resolves these three states
+    # distinctly. We deliberately do NOT default to "*" so that pydantic
+    # Settings does not collapse "unset" and "explicitly empty" into the same
+    # value, which would otherwise cause an explicit empty CORS_ORIGINS in
+    # production to be misread as a wildcard (and rejected by the production
+    # validator).
+    cors_origins: str | None = Field(default=None, validation_alias="CORS_ORIGINS")
 
     # ------------------------------------------------------------------
     # Security / transport
@@ -200,14 +209,37 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins_list(self) -> list[str]:
-        """Return CORS origins as a non-empty list of trimmed values.
+        """Resolve ``cors_origins`` into a list suitable for Starlette's
+        ``CORSMiddleware.allow_origins``.
 
-"*" is preserved for development so existing behavior is unchanged
-        unless the caller explicitly configures specific origins.
+        The three operator-intended states are preserved distinctly:
+
+        - env var unset (``None``) — fall back to the development default
+          ``["*"]`` so local workflows keep working unchanged.
+        - env var set but empty / whitespace-only — explicitly configured
+          "no browser origins allowed" (e.g. production deployment with no
+          frontend). Resolves to ``[]``. Starlette treats an empty
+          ``allow_origins`` list as "no origins permitted": CORS preflight and
+          actual cross-origin browser requests are rejected (no
+          ``Access-Control-Allow-Origin`` is sent), while same-origin and
+          non-browser requests still succeed. This is the secure choice when
+          no client web app exists yet, and is accepted by the production
+          validator.
+        - env var set to one or more comma-separated values — each non-empty
+          trimmed entry becomes a list element. An explicit ``"*"`` is
+          preserved and remains rejected in production by the production
+          validator (see ``_check_production``).
         """
-        origins = [origin.strip() for origin in self.cors_origins.split(",")]
+        raw = self.cors_origins
+        if raw is None:
+            return ["*"]
+        if not raw.strip():
+            return []
+        origins = [origin.strip() for origin in raw.split(",")]
         origins = [origin for origin in origins if origin]
-        return origins or ["*"]
+        if not origins:
+            return []
+        return origins
 
     @property
     def allowed_hosts_list(self) -> list[str]:

@@ -27,7 +27,6 @@ _VALID_PROD = {
     "APP_ENV": "production",
     "JWT_SECRET": "s" * 32,
     "MONGODB_URI": "mongodb+srv://realuser:realpass@cluster0.mongodb.net",
-    "CORS_ORIGINS": "https://app.example.com",
     "ALLOWED_HOSTS": "api.example.com",
     "SECURE_TRANSPORT": "true",
 }
@@ -42,6 +41,19 @@ def load(monkeypatch, **overrides) -> Settings:
             monkeypatch.delenv(key, raising=False)
         else:
             monkeypatch.setenv(key, value)
+    return Settings(_env_file=None)
+
+
+def load_without(monkeypatch, *omit: str, **overrides) -> Settings:
+    """Build a Settings with a curated env, omitting the named keys entirely
+    (they are removed from the process env before Settings() runs)."""
+    env = dict(_BASE_ENV)
+    env.update(overrides)
+    for key in omit:
+        env.pop(key, None)
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
     return Settings(_env_file=None)
 
 
@@ -119,11 +131,12 @@ def test_production_rejects_unsafe_values(monkeypatch, bad):
 
 
 def test_valid_production_loads(monkeypatch):
-    s = load(monkeypatch, **_VALID_PROD)
+    s = load(monkeypatch, **_VALID_PROD, CORS_ORIGINS="https://app.example.com")
     assert s.env == "production"
     assert s.jwt_secret == "s" * 32
     assert s.allowed_hosts_list == ["api.example.com"]
     assert s.secure_transport is True
+    assert s.cors_origins_list == ["https://app.example.com"]
 
 
 def test_cors_origins_list_parsing(monkeypatch):
@@ -135,8 +148,89 @@ def test_cors_origins_list_parsing(monkeypatch):
         "https://a.com",
         "https://b.com",
     ]
-    assert load(monkeypatch, CORS_ORIGINS="" ).cors_origins_list == ["*"]
-    assert load(monkeypatch, CORS_ORIGINS=" ").cors_origins_list == ["*"]
+    # Explicit empty / whitespace-only: "no browser origins allowed" — a
+    # distinct, production-valid value; must NOT be coerced into ["*"].
+    assert load(monkeypatch, CORS_ORIGINS="").cors_origins_list == []
+    assert load(monkeypatch, CORS_ORIGINS=" ").cors_origins_list == []
+    assert load(monkeypatch, CORS_ORIGINS=" , , ").cors_origins_list == []
+    # Unset (no env var) keeps the historical development default of ["*"].
+    monkeypatch.delenv("CORS_ORIGINS", raising=False)
+    assert load(monkeypatch).cors_origins_list == ["*"]
+
+
+def test_cors_origins_unset_vs_empty_are_distinguished(monkeypatch):
+    """The bug that broke Render: an explicitly empty CORS_ORIGINS= was being
+    collapsed to the unset default "*", which the production validator then
+    rejected. Confirm the two states now resolve differently."""
+    # 1) unset: raw field is None -> development default ["*"]
+    s_unset = load_without(monkeypatch, "CORS_ORIGINS")
+    assert s_unset.cors_origins is None
+    assert s_unset.cors_origins_list == ["*"]
+
+    # 2) explicit empty: raw field is "" -> secure "no origins" []
+    s_empty = load(monkeypatch, CORS_ORIGINS="")
+    assert s_empty.cors_origins == ""
+    assert s_empty.cors_origins_list == []
+
+
+def test_production_empty_cors_origins_accepted(monkeypatch):
+    """Render scenario: APP_ENV=production with no frontend, CORS_ORIGINS=.
+    Settings must load successfully and resolve to an empty allow list."""
+    s = load(monkeypatch, **_VALID_PROD, CORS_ORIGINS="")
+    assert s.env == "production"
+    assert s.cors_origins_list == []
+
+
+def test_production_explicit_wildcard_cors_rejected(monkeypatch):
+    """Security invariant: an explicitly configured CORS_ORIGINS=* must still
+    be rejected in production (no regression)."""
+    with pytest.raises(ValidationError) as excinfo:
+        load(monkeypatch, **_VALID_PROD, CORS_ORIGINS="*")
+    assert "CORS_ORIGINS" in str(excinfo.value)
+
+
+def test_production_one_specific_origin_accepted(monkeypatch):
+    s = load(monkeypatch, **_VALID_PROD, CORS_ORIGINS="https://app.example.com")
+    assert s.cors_origins_list == ["https://app.example.com"]
+
+
+def test_production_multiple_specific_origins_accepted(monkeypatch):
+    s = load(
+        monkeypatch,
+        **_VALID_PROD,
+        CORS_ORIGINS="https://app.example.com,https://admin.example.com",
+    )
+    assert s.cors_origins_list == [
+        "https://app.example.com",
+        "https://admin.example.com",
+    ]
+
+
+def test_development_default_cors_behavior_unchanged(monkeypatch):
+    """Pre-existing development defaults must keep working: unset CORS_ORIGINS
+    falls back to ["*"]; an explicit "*" is accepted in dev/test."""
+    # unset -> ["*"]
+    assert load_without(monkeypatch, "CORS_ORIGINS").cors_origins_list == ["*"]
+    # explicit "*" in development
+    assert load(monkeypatch, CORS_ORIGINS="*").cors_origins_list == ["*"]
+    # explicit specific origin in development
+    assert load(
+        monkeypatch, CORS_ORIGINS="https://local.example.com"
+    ).cors_origins_list == ["https://local.example.com"]
+    # explicit empty in dev also resolves to [] (per the new contract; this
+    # is the same property test_cors_origins_list_parsing checks, repeated
+    # here to confirm dev is not exempted accidentally).
+    assert load(monkeypatch, CORS_ORIGINS="").cors_origins_list == []
+
+
+def test_cors_middleware_receives_empty_list_when_empty_configured(monkeypatch):
+    """The Starlette CORSMiddleware must receive the empty allow list — i.e.
+    no accidental wildcard substitution downstream of the settings layer."""
+    s = load(monkeypatch, **_VALID_PROD, CORS_ORIGINS="")
+    assert s.cors_origins_list == []
+    # And the production validator must NOT have replaced the empty list
+    # with ["*"] (which would have raised).
+    assert s.cors_origins_list != ["*"]
 
 
 def test_allowed_hosts_list_parsing(monkeypatch):
