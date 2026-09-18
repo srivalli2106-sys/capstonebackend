@@ -12,8 +12,9 @@ import pytest
 from server.exceptions import InvalidRequest, ResourceNotFound
 from server.services.key_service import KeyService
 
+_XDH = ("aa" * 32)
 _SPK = ("cd" * 32)
-_SIG = ("ef" * 32)
+_SIG = ("ef" * 64)  # 64-byte Ed25519 signature = 128 hex chars
 _OPK = ("77" * 32)
 
 
@@ -33,8 +34,10 @@ class _Keys:
         self.bundle = bundle
         self.consumed: list[str] = []
 
-    async def upsert_key_bundle(self, user_id, spk_public, spk_sig, opk_public):
-        self.uploaded = (user_id, spk_public, spk_sig, opk_public)
+    async def upsert_key_bundle(
+        self, user_id, xdh_public, spk_public, spk_sig, opk_public
+    ):
+        self.uploaded = (user_id, xdh_public, spk_public, spk_sig, opk_public)
 
     async def get_key_bundle(self, user_id: str) -> dict | None:
         return self.bundle
@@ -50,15 +53,16 @@ class _Keys:
 def _bundle(opk=None, version=1):
     return {
         "user_id": "carol",
+        "xdh_public": b"\xaa" * 32,
         "spk_public": b"\xcd" * 32,
-        "spk_sig": b"\xef" * 32,
+        "spk_sig": b"\xef" * 64,
         "opk_public": opk,
         "version": version,
     }
 
 
 def _user(bundle_owner_id: str) -> dict:
-    return {"user_id": bundle_owner_id, "ik_public": b"\xaa" * 32}
+    return {"user_id": bundle_owner_id, "ik_public": b"\xbb" * 32}
 
 
 # ---------------------------------------------------------------------------
@@ -69,42 +73,63 @@ def _user(bundle_owner_id: str) -> dict:
 async def test_upload_unknown_user_raises_not_found():
     svc = KeyService(users=_Users(registered=False), keys=_Keys())
     with pytest.raises(ResourceNotFound) as exc:
-        await svc.upload("carol", _SPK, _SIG, _OPK)
+        await svc.upload("carol", _XDH, _SPK, _SIG, _OPK)
     assert exc.value.message == "User not found. Register first."
 
 
 async def test_upload_rejects_non_hex_keys():
     svc = KeyService(users=_Users(), keys=_Keys())
     with pytest.raises(InvalidRequest) as exc:
-        await svc.upload("carol", "zz", _SIG, _OPK)
-    assert exc.value.message == "spk_public and spk_sig must be hex"
+        await svc.upload("carol", "zz", _SPK, _SIG, _OPK)
+    assert exc.value.message == "xdh_public, spk_public, and spk_sig must be hex"
 
 
 async def test_upload_rejects_non_hex_signature():
     svc = KeyService(users=_Users(), keys=_Keys())
     with pytest.raises(InvalidRequest) as exc:
-        await svc.upload("carol", _SPK, "zz", _OPK)
-    assert exc.value.message == "spk_public and spk_sig must be hex"
+        await svc.upload("carol", _XDH, _SPK, "zz", _OPK)
+    assert exc.value.message == "xdh_public, spk_public, and spk_sig must be hex"
+
+
+async def test_upload_rejects_wrong_xdh_length():
+    svc = KeyService(users=_Users(), keys=_Keys())
+    with pytest.raises(InvalidRequest) as exc:
+        await svc.upload("carol", "aa" * 31, _SPK, _SIG, _OPK)
+    assert exc.value.message == "xdh_public must be 32 bytes"
 
 
 async def test_upload_rejects_wrong_spk_length():
     svc = KeyService(users=_Users(), keys=_Keys())
     with pytest.raises(InvalidRequest) as exc:
-        await svc.upload("carol", "cd" * 31, _SIG, _OPK)
+        await svc.upload("carol", _XDH, "cd" * 31, _SIG, _OPK)
     assert exc.value.message == "spk_public must be 32 bytes"
+
+
+async def test_upload_rejects_short_signature():
+    svc = KeyService(users=_Users(), keys=_Keys())
+    with pytest.raises(InvalidRequest) as exc:
+        await svc.upload("carol", _XDH, _SPK, "ef" * 32, _OPK)
+    assert exc.value.message == "spk_sig must be 64 bytes"
+
+
+async def test_upload_rejects_long_signature():
+    svc = KeyService(users=_Users(), keys=_Keys())
+    with pytest.raises(InvalidRequest) as exc:
+        await svc.upload("carol", _XDH, _SPK, "ef" * 65, _OPK)
+    assert exc.value.message == "spk_sig must be 64 bytes"
 
 
 async def test_upload_rejects_non_hex_opk():
     svc = KeyService(users=_Users(), keys=_Keys())
     with pytest.raises(InvalidRequest) as exc:
-        await svc.upload("carol", _SPK, _SIG, "zz")
+        await svc.upload("carol", _XDH, _SPK, _SIG, "zz")
     assert exc.value.message == "opk_public must be hex"
 
 
 async def test_upload_rejects_wrong_opk_length():
     svc = KeyService(users=_Users(), keys=_Keys())
     with pytest.raises(InvalidRequest) as exc:
-        await svc.upload("carol", _SPK, _SIG, "77" * 31)
+        await svc.upload("carol", _XDH, _SPK, _SIG, "77" * 31)
     assert exc.value.message == "opk_public must be 32 bytes"
 
 
@@ -112,11 +137,17 @@ async def test_upload_without_opk_passes_none():
     keys = _Keys()
     svc = KeyService(users=_Users(), keys=keys)
 
-    result = await svc.upload("carol", _SPK, _SIG, None)
+    result = await svc.upload("carol", _XDH, _SPK, _SIG, None)
 
     assert result == {"status": "ok", "user_id": "carol"}
-    uid, spk, sig, opk = keys.uploaded
-    assert (uid, spk, sig, opk) == ("carol", b"\xcd" * 32, b"\xef" * 32, None)
+    uid, xdh, spk, sig, opk = keys.uploaded
+    assert (uid, xdh, spk, sig, opk) == (
+        "carol",
+        b"\xaa" * 32,
+        b"\xcd" * 32,
+        b"\xef" * 64,
+        None,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -139,9 +170,10 @@ async def test_get_bundle_returns_hex_dict_and_consumes_opk_once():
 
     assert result == {
         "user_id": "carol",
-        "ik_public": "aa" * 32,
+        "ik_public": "bb" * 32,
+        "xdh_public": "aa" * 32,
         "spk_public": "cd" * 32,
-        "spk_sig": "ef" * 32,
+        "spk_sig": "ef" * 64,
         "opk_public": "77" * 32,
         "version": 1,
     }
@@ -158,6 +190,7 @@ async def test_get_bundle_without_opk_returns_none():
     result = await svc.get_bundle("carol")
 
     assert result["opk_public"] is None
+    assert result["xdh_public"] == "aa" * 32
 
 
 async def test_get_bundle_serves_opk_exactly_once():

@@ -22,6 +22,7 @@ class KeyRepository(Protocol):
     async def upsert_key_bundle(
         self,
         user_id: str,
+        xdh_public: bytes,
         spk_public: bytes,
         spk_sig: bytes,
         opk_public: bytes | None,

@@ -146,9 +146,12 @@ async def test_upsert_key_bundle_inserts_new_bundle(monkeypatch):
     fake = _FakeKeyBundles()
     monkeypatch.setattr("server.repositories.key_repository.get_db", lambda: _FakeDB(bundles=fake))
 
-    await key_repository.upsert_key_bundle("alice", b"\x01" * 32, b"\x02" * 64, None)
+    await key_repository.upsert_key_bundle(
+        "alice", b"\x00" * 32, b"\x01" * 32, b"\x02" * 64, None
+    )
 
     doc = fake.docs["alice"]
+    assert doc["xdh_public"] == b"\x00" * 32
     assert doc["spk_public"] == b"\x01" * 32
     assert doc["spk_sig"] == b"\x02" * 64
     assert doc["opk_public"] is None
@@ -158,13 +161,16 @@ async def test_upsert_key_bundle_inserts_new_bundle(monkeypatch):
 async def test_upsert_key_bundle_bumps_version_on_update(monkeypatch):
     fake = _FakeKeyBundles()
     monkeypatch.setattr("server.repositories.key_repository.get_db", lambda: _FakeDB(bundles=fake))
-    await key_repository.upsert_key_bundle("alice", b"\x01" * 32, b"\x02" * 64, None)
+    await key_repository.upsert_key_bundle(
+        "alice", b"\x00" * 32, b"\x01" * 32, b"\x02" * 64, None
+    )
 
     await key_repository.upsert_key_bundle(
-        "alice", b"\x03" * 32, b"\x04" * 64, b"\x05" * 32
+        "alice", b"\x06" * 32, b"\x03" * 32, b"\x04" * 64, b"\x05" * 32
     )
 
     doc = fake.docs["alice"]
+    assert doc["xdh_public"] == b"\x06" * 32
     assert doc["spk_public"] == b"\x03" * 32
     assert doc["opk_public"] == b"\x05" * 32
     assert doc["version"] == 2
@@ -173,7 +179,9 @@ async def test_upsert_key_bundle_bumps_version_on_update(monkeypatch):
 async def test_get_key_bundle_returns_document_or_none(monkeypatch):
     fake = _FakeKeyBundles()
     monkeypatch.setattr("server.repositories.key_repository.get_db", lambda: _FakeDB(bundles=fake))
-    await key_repository.upsert_key_bundle("alice", b"\x01" * 32, b"\x02" * 64, None)
+    await key_repository.upsert_key_bundle(
+        "alice", b"\x00" * 32, b"\x01" * 32, b"\x02" * 64, None
+    )
 
     assert (await key_repository.get_key_bundle("alice"))["user_id"] == "alice"
     assert await key_repository.get_key_bundle("ghost") is None
@@ -183,7 +191,9 @@ async def test_consume_opk_returns_key_and_nulls_it_atomically(monkeypatch):
     fake = _FakeKeyBundles()
     monkeypatch.setattr("server.repositories.key_repository.get_db", lambda: _FakeDB(bundles=fake))
     opk = b"\x77" * 32
-    await key_repository.upsert_key_bundle("alice", b"\x01" * 32, b"\x02" * 64, opk)
+    await key_repository.upsert_key_bundle(
+        "alice", b"\x00" * 32, b"\x01" * 32, b"\x02" * 64, opk
+    )
 
     assert await key_repository.consume_opk("alice") == opk
     assert fake.docs["alice"]["opk_public"] is None
@@ -194,7 +204,9 @@ async def test_consume_opk_returns_key_and_nulls_it_atomically(monkeypatch):
 async def test_consume_opk_with_no_opk_returns_none(monkeypatch):
     fake = _FakeKeyBundles()
     monkeypatch.setattr("server.repositories.key_repository.get_db", lambda: _FakeDB(bundles=fake))
-    await key_repository.upsert_key_bundle("alice", b"\x01" * 32, b"\x02" * 64, None)
+    await key_repository.upsert_key_bundle(
+        "alice", b"\x00" * 32, b"\x01" * 32, b"\x02" * 64, None
+    )
 
     assert await key_repository.consume_opk("alice") is None
 

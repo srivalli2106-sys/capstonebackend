@@ -15,8 +15,9 @@ from server.middleware import create_token
 pytestmark = pytest.mark.integration
 
 IK = "ab" * 32          # valid 32-byte identity key (hex)
+XDH = "ab" * 32         # valid 32-byte X3DH X25519 identity (hex)
 SPK = "cd" * 32         # valid 32-byte signed prekey (hex)
-SIG = "ef" * 32         # valid 32-byte prekey signature (hex)
+SIG = "ef" * 64         # valid 64-byte Ed25519 prekey signature (hex)
 OPK = "12" * 32         # valid 32-byte one-time prekey (hex)
 
 
@@ -79,21 +80,35 @@ def test_keys_upload_fetch_and_opk_consumption(client):
     # Auth is required.
     assert client.post(
         "/keys/upload",
-        json={"spk_public": SPK, "spk_sig": SIG, "opk_public": OPK},
+        json={
+            "xdh_public": XDH,
+            "spk_public": SPK,
+            "spk_sig": SIG,
+            "opk_public": OPK,
+        },
     ).status_code == 401
 
     # Bad hex / wrong length are rejected before touching the DB.
     assert client.post(
-        "/keys/upload", json={"spk_public": "zz", "spk_sig": SIG}, headers=headers
+        "/keys/upload",
+        json={"xdh_public": XDH, "spk_public": "zz", "spk_sig": SIG},
+        headers=headers,
     ).status_code == 400
     assert client.post(
-        "/keys/upload", json={"spk_public": "abcd", "spk_sig": SIG}, headers=headers
+        "/keys/upload",
+        json={"xdh_public": XDH, "spk_public": "abcd", "spk_sig": SIG},
+        headers=headers,
     ).status_code == 400
 
     # Valid upload.
     upload = client.post(
         "/keys/upload",
-        json={"spk_public": SPK, "spk_sig": SIG, "opk_public": OPK},
+        json={
+            "xdh_public": XDH,
+            "spk_public": SPK,
+            "spk_sig": SIG,
+            "opk_public": OPK,
+        },
         headers=headers,
     )
     assert upload.status_code == 200
@@ -106,6 +121,7 @@ def test_keys_upload_fetch_and_opk_consumption(client):
     assert bundle.status_code == 200
     body = bundle.json()
     assert body["user_id"] == uid
+    assert body["xdh_public"] == XDH
     assert body["spk_public"] == SPK
     assert body["opk_public"] == OPK
 

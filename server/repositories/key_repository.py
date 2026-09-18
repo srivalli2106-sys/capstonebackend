@@ -21,6 +21,7 @@ class KeyRepository:
     async def upsert_key_bundle(
         self,
         user_id: str,
+        xdh_public: bytes,
         spk_public: bytes,
         spk_sig: bytes,
         opk_public: bytes | None,
@@ -32,6 +33,7 @@ class KeyRepository:
                 {"user_id": user_id},
                 {
                     "$set": {
+                        "xdh_public": xdh_public,
                         "spk_public": spk_public,
                         "spk_sig": spk_sig,
                         "opk_public": opk_public,
@@ -44,6 +46,7 @@ class KeyRepository:
         await db["key_bundles"].insert_one(
             {
                 "user_id": user_id,
+                "xdh_public": xdh_public,
                 "spk_public": spk_public,
                 "spk_sig": spk_sig,
                 "opk_public": opk_public,

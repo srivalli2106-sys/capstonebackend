@@ -34,15 +34,21 @@ router = APIRouter(prefix="/keys", tags=["keys"])
 # ---------------------------------------------------------------------------
 
 
-# spk/sig/opk are hex-encoded 32-byte X25519 key material = 64 hex chars;
-# the byte-length checks in the route already enforce the fixed size, and the
-# hex-length cap keeps oversized strings from being parsed in the first place.
+# spk_public/opk_public/xdh_public are hex-encoded 32-byte X25519 key material
+# = 64 hex chars. spk_sig is a hex-encoded 64-byte Ed25519 signature = 128 hex
+# chars. The byte-length checks in the service already enforce the fixed size;
+# these caps keep oversized strings from being parsed in the first place.
 _MAX_KEY_HEX_LENGTH = 64
+_MAX_SIGNATURE_HEX_LENGTH = 128
 
 
 class UploadKeyBundleRequest(BaseModel):
+    xdh_public: str = Field(max_length=_MAX_KEY_HEX_LENGTH)  # hex X25519 identity
     spk_public: str = Field(max_length=_MAX_KEY_HEX_LENGTH)  # hex
-    spk_sig: str = Field(max_length=_MAX_KEY_HEX_LENGTH)    # hex
+    spk_sig: str = Field(
+        min_length=_MAX_SIGNATURE_HEX_LENGTH,
+        max_length=_MAX_SIGNATURE_HEX_LENGTH,
+    )  # hex Ed25519 signature (64 bytes)
     opk_public: str | None = Field(
         default=None, max_length=_MAX_KEY_HEX_LENGTH
     )  # hex, nullable
@@ -51,6 +57,7 @@ class UploadKeyBundleRequest(BaseModel):
 class KeyBundleResponse(BaseModel):
     user_id: str
     ik_public: str  # hex — registered Ed25519 auth identity (verifies spk_sig)
+    xdh_public: str  # hex — X25519 X3DH identity
     spk_public: str   # hex
     spk_sig: str      # hex
     opk_public: str | None = None  # hex
@@ -79,7 +86,11 @@ async def upload_key_bundle(
     user_id = auth["user_id"]
 
     await key_service.upload(
-        user_id, body.spk_public, body.spk_sig, body.opk_public
+        user_id,
+        body.xdh_public,
+        body.spk_public,
+        body.spk_sig,
+        body.opk_public,
     )
     return {"status": "ok", "user_id": user_id}
 
