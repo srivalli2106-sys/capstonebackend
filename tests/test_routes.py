@@ -16,6 +16,7 @@ EXPECTED_HTTP = {
     "/keys/upload": {"POST"},
     "/keys/bundle/{target_user_id}": {"GET"},
     "/keys/prekeys/{target_user_id}": {"GET"},
+    "/presence/{target_user_id}": {"GET"},
 }
 
 

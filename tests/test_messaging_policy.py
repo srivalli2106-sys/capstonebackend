@@ -38,9 +38,7 @@ def _raw(to: str, data: str, *, mid: str | None = None) -> str:
     )
 
 
-def _assert_envelope(
-    parsed: dict, *, sender: str, recipient: str, data: str
-) -> None:
+def _assert_envelope(parsed: dict, *, sender: str, recipient: str, data: str) -> None:
     assert parsed["version"] == 1
     assert parsed["type"] == "text"
     assert parsed["sender"] == sender
@@ -133,9 +131,7 @@ async def test_queue_failure_is_reported_and_never_claimed(caplog):
     with caplog.at_level(logging.INFO, logger="server.services.message_service"):
         await svc.handle_message("alice", _raw("carol", "blob"))  # must not raise
 
-    error_lines = [
-        r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR
-    ]
+    error_lines = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
     assert any("NOT queued" in line for line in error_lines)
     assert not any("Queued message" in line for line in error_lines)
 
@@ -385,7 +381,7 @@ async def test_replay_window_expiry_allows_same_id_again():
     assert len(sent) == 1
 
     # Force the window to expire without real sleeping.
-    svc._seen_ids[(("alice", mid))] -= 2.0
+    svc._seen_ids[("alice", mid)] -= 2.0
 
     await svc.handle_message("alice", _raw("carol", "two", mid=mid))
     assert len(sent) == 2
@@ -452,3 +448,117 @@ async def test_unknown_message_type_is_dropped():
     await svc.handle_message("alice", frame)
 
     assert sent == []
+
+
+# ---------------------------------------------------------------------------
+# Messaging UX phase: control-frame relay policy
+# ---------------------------------------------------------------------------
+
+
+def _raw_ctl(to: str, frame_type: str, data: str) -> str:
+    return json.dumps(
+        {
+            "id": new_message_id(),
+            "type": frame_type,
+            "recipient": to,
+            "data": data,
+        }
+    )
+
+
+async def test_control_frame_forwarded_to_online_recipient():
+    sent: list[str] = []
+
+    class FakeWS:
+        async def send_text(self, payload):
+            sent.append(payload)
+
+    async def _must_not_enqueue(user_id, payload):
+        raise AssertionError("must not enqueue for an online recipient")
+
+    async def _online(user_id):
+        return True
+
+    svc = MessageService(
+        messages=_Messages(enqueue=_must_not_enqueue),
+        presence=_Presence(online=_online),
+        registry_lookup=_registry(_ConnStub(FakeWS())),
+    )
+
+    await svc.handle_message("alice", _raw_ctl("carol", "typing", "1"))
+
+    assert len(sent) == 1
+    parsed = json.loads(sent[0])
+    assert parsed["type"] == "typing"
+    assert parsed["sender"] == "alice"
+    assert parsed["recipient"] == "carol"
+    assert parsed["data"] == "1"
+
+
+async def test_control_frame_dropped_not_queued_when_offline():
+    queued: list[tuple[str, str]] = []
+
+    async def _enqueue(user_id, payload):
+        queued.append((user_id, payload))
+
+    async def _offline(user_id):
+        return False
+
+    svc = MessageService(
+        messages=_Messages(enqueue=_enqueue),
+        presence=_Presence(online=_offline),
+        registry_lookup=_registry(None),
+    )
+
+    for frame_type, data in (
+        ("typing", "1"),
+        ("delivery_receipt", "msg-wire-id"),
+        ("read_receipt", "msg-wire-id"),
+    ):
+        await svc.handle_message("alice", _raw_ctl("carol", frame_type, data))
+
+    assert queued == []
+
+
+async def test_control_frame_dropped_when_forward_fails():
+    queued: list[tuple[str, str]] = []
+
+    class FailingWS:
+        async def send_text(self, payload):
+            raise RuntimeError("ws closed")
+
+    async def _enqueue(user_id, payload):
+        queued.append((user_id, payload))
+
+    async def _online(user_id):
+        return True
+
+    svc = MessageService(
+        messages=_Messages(enqueue=_enqueue),
+        presence=_Presence(online=_online),
+        registry_lookup=_registry(_ConnStub(FailingWS())),
+    )
+
+    await svc.handle_message("alice", _raw_ctl("carol", "read_receipt", "x"))
+    await svc.handle_message("alice", _raw_ctl("carol", "typing", "0"))
+
+    assert queued == []
+
+
+async def test_text_message_still_queued_for_offline_recipient():
+    queued: list[tuple[str, str]] = []
+
+    async def _enqueue(user_id, payload):
+        queued.append((user_id, payload))
+
+    async def _offline(user_id):
+        return False
+
+    svc = MessageService(
+        messages=_Messages(enqueue=_enqueue),
+        presence=_Presence(online=_offline),
+        registry_lookup=_registry(None),
+    )
+
+    await svc.handle_message("alice", _raw("carol", "blob"))
+    assert len(queued) == 1

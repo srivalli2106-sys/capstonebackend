@@ -23,7 +23,7 @@ from .exceptions import install_exception_handlers
 from .logging_config import setup_logging
 from .redis_client import close_redis, ping_redis
 from .request_id import RequestIDMiddleware
-from .routes import auth, keys, messages
+from .routes import auth, keys, messages, presence
 from .security import AllowedHostsMiddleware, SecurityHeadersMiddleware
 from .ws_auth import REASON_GOING_AWAY, WS_GOING_AWAY
 from .ws_registry import registry
@@ -144,6 +144,7 @@ install_exception_handlers(app)
 app.include_router(auth.router)
 app.include_router(keys.router)
 app.include_router(messages.router)
+app.include_router(presence.router)
 
 
 @app.get("/health")

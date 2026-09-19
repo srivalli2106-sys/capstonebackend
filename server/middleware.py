@@ -54,13 +54,14 @@ def decode_token(token: str) -> dict:
 # ---------------------------------------------------------------------------
 
 RATE_LIMITS: dict[str, tuple[int, int]] = {
-    "register": (1, 3600),       # 1 request per hour per IP
-    "login": (10, 60),           # 10 requests per minute
-    "challenge": (10, 60),       # challenge requests per minute
-    "verify": (20, 60),          # verification attempts per minute
-    "logout": (30, 60),          # logout requests per minute
-    "keys": (30, 60),            # 30 requests per minute
-    "general": (100, 60),        # 100 requests per minute
+    "register": (1, 3600),  # 1 request per hour per IP
+    "login": (10, 60),  # 10 requests per minute
+    "challenge": (10, 60),  # challenge requests per minute
+    "verify": (20, 60),  # verification attempts per minute
+    "logout": (30, 60),  # logout requests per minute
+    "keys": (30, 60),  # 30 requests per minute
+    "presence": (60, 60),  # 60 presence polls per minute
+    "general": (100, 60),  # 100 requests per minute
     "ws_connect": (settings.ws_connect_rate_per_minute, 60),
     "ws_message": (settings.ws_message_rate_per_minute, 60),
 }

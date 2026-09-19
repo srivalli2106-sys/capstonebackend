@@ -39,6 +39,13 @@ logger = logging.getLogger(__name__)
 # message contents are never inspected.
 MAX_WS_MESSAGE_CHARS = 65536
 
+# Control-frame types (Messaging UX phase). These envelopes carry no message
+# payload: typing state and delivery/read receipts are real-time only. They
+# are forwarded to an online recipient and otherwise dropped — never queued —
+# so a stale queue can neither replay a typing event later nor claim delivery
+# of a message the peer has not actually received.
+CONTROL_ENVELOPE_TYPES = frozenset({"delivery_receipt", "read_receipt", "typing"})
+
 
 def _default_registry_lookup(user_id: str):
     """Resolve the recipient's live connection from the process registry."""
@@ -135,6 +142,19 @@ class MessageService:
                     return
                 except Exception:
                     pass
+
+        # Recipient offline (or the live socket vanished). Control frames
+        # (typing / delivery / read receipts) are real-time state: never queue
+        # them. A queued receipt would incorrectly claim delivery to a peer
+        # that never saw the message; a queued typing frame would replay stale
+        # UI state long after the fact. Message frames fall through to queue.
+        if envelope["type"] in CONTROL_ENVELOPE_TYPES:
+            logger.info(
+                "[WS] Dropped control frame %s -> %s (recipient offline)",
+                sender_id,
+                recipient_id,
+            )
+            return
 
         # Recipient offline — queue the message. If the Redis write fails we
         # must never claim the message was queued: report it explicitly and
