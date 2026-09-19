@@ -28,7 +28,16 @@ class _FakeKeyService:
         self.status_404 = False
 
     async def upload(
-        self, user_id, xdh_public_hex, spk_public_hex, spk_sig_hex, opk_public_hex
+        self,
+        user_id,
+        xdh_public_hex,
+        spk_public_hex,
+        spk_sig_hex,
+        opk_public_hex,
+        pq_kem_public_hex=None,
+        pq_sig_public_hex=None,
+        pq_binding_sig_hex=None,
+        protocol_version=1,
     ):
         self.uploaded = (
             user_id,
@@ -36,6 +45,10 @@ class _FakeKeyService:
             spk_public_hex,
             spk_sig_hex,
             opk_public_hex,
+            pq_kem_public_hex,
+            pq_sig_public_hex,
+            pq_binding_sig_hex,
+            protocol_version,
         )
 
     async def get_bundle(self, target_user_id: str) -> dict:
@@ -49,7 +62,10 @@ class _FakeKeyService:
             "spk_public": _SPK,
             "spk_sig": _SIG,
             "opk_public": _OPK,
-            "version": 3,
+            "pq_kem_public": None,
+            "pq_sig_public": None,
+            "pq_binding_sig": None,
+            "protocol_version": 1,
         }
 
     async def opk_status(self, target_user_id: str) -> dict:
@@ -98,7 +114,9 @@ def test_upload_returns_ok_and_applies_keys_category(client, monkeypatch):
     )
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok", "user_id": "alice"}
-    assert fake.uploaded == ("alice", _XDH, _SPK, _SIG, _OPK)
+    assert fake.uploaded == (
+        "alice", _XDH, _SPK, _SIG, _OPK, None, None, None, 1
+    )
     assert recorded == ["keys"]
 
 
@@ -187,7 +205,10 @@ def test_get_bundle_includes_xdh_public(client, monkeypatch):
         "spk_public": _SPK,
         "spk_sig": _SIG,
         "opk_public": _OPK,
-        "version": 3,
+        "pq_kem_public": None,
+        "pq_sig_public": None,
+        "pq_binding_sig": None,
+        "protocol_version": 1,
     }
     # xdh_public is a 32-byte X25519 public key = 64 hex chars.
     assert len(body["xdh_public"]) == 64

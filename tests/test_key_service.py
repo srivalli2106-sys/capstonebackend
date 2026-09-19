@@ -35,9 +35,28 @@ class _Keys:
         self.consumed: list[str] = []
 
     async def upsert_key_bundle(
-        self, user_id, xdh_public, spk_public, spk_sig, opk_public
+        self,
+        user_id,
+        xdh_public,
+        spk_public,
+        spk_sig,
+        opk_public,
+        pq_kem_public=None,
+        pq_sig_public=None,
+        pq_binding_sig=None,
+        protocol_version=1,
     ):
-        self.uploaded = (user_id, xdh_public, spk_public, spk_sig, opk_public)
+        self.uploaded = (
+            user_id,
+            xdh_public,
+            spk_public,
+            spk_sig,
+            opk_public,
+            pq_kem_public,
+            pq_sig_public,
+            pq_binding_sig,
+            protocol_version,
+        )
 
     async def get_key_bundle(self, user_id: str) -> dict | None:
         return self.bundle
@@ -140,7 +159,8 @@ async def test_upload_without_opk_passes_none():
     result = await svc.upload("carol", _XDH, _SPK, _SIG, None)
 
     assert result == {"status": "ok", "user_id": "carol"}
-    uid, xdh, spk, sig, opk = keys.uploaded
+    # First five classical fields; PQ fields default to None/version=1.
+    uid, xdh, spk, sig, opk, pq_kem, pq_sig, pq_bind, version = keys.uploaded
     assert (uid, xdh, spk, sig, opk) == (
         "carol",
         b"\xaa" * 32,
@@ -148,6 +168,8 @@ async def test_upload_without_opk_passes_none():
         b"\xef" * 64,
         None,
     )
+    assert pq_kem is None and pq_sig is None and pq_bind is None
+    assert version == 1
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +197,10 @@ async def test_get_bundle_returns_hex_dict_and_consumes_opk_once():
         "spk_public": "cd" * 32,
         "spk_sig": "ef" * 64,
         "opk_public": "77" * 32,
-        "version": 1,
+        "pq_kem_public": None,
+        "pq_sig_public": None,
+        "pq_binding_sig": None,
+        "protocol_version": 1,
     }
     # OPK consumed exactly once: the winning fetch serves the fresh prekey and
     # leaves the stored value null so later fetches get nothing.

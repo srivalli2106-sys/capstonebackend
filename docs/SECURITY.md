@@ -68,12 +68,55 @@ in `THREAT_MODEL.md`.
 
 ## Key hygiene
 
-- All key material stays in the browser: X25519 X3DH identity, SPK/OPKs, and
-  the derived ratchet/chain/message keys.
+- All key material stays in the browser: X25519 X3DH identity, SPK/OPKs, the
+  ML-KEM-768 kem identity, the ML-DSA-44 sig identity, and the derived
+  ratchet/chain/message keys.
 - Signed prekey binding uses an explicit domain-separated context
   (`secure-messaging-signed-prekey-v1`) preventing signature reuse across
   apps/roles.
+- PQ key bundle binding uses an explicit domain-separated context
+  (`secure-messaging-hybrid-binding-v1`) that signs the exact classical
+  and PQ public material together so a classical-only attacker cannot
+  silently inject or substitute PQ material.
 - OPKs are single-use and consumed atomically server-side.
+
+## Hybrid classical + post-quantum E2EE
+
+- Authentication continues to use Ed25519 (signing the SPK and the ML-DSA
+  binding signature covers both Ed25519 and ML-DSA contexts on every bundle
+  upload). ML-DSA-44 adds a second authentication family with PQ guarantees.
+- Key establishment combines X25519 DH (classical X3DH) and ML-KEM-768
+  encapsulation. Both shared secrets are combined via a domain-separated,
+  length-prefixed HKDF-SHA256 (see `MESSAGING.md` and
+  `docs/HYBRID_PQ.md`) so the two components can never be confused.
+- The hybrid root secret feeds the existing Double Ratchet unchanged.
+- ML-KEM-768 and ML-DSA-44 (NIST FIPS 203 / FIPS 204) are used via
+  `@noble/post-quantum` on the device; the server has no PQ library and
+  performs only structural validation (byte lengths, classical SPK sig).
+- Hybrid mode is opt-in via a `protocol_version` field in the key bundle
+  (`1` = classical only, `2` = hybrid). Classical-only clients continue
+  to work without any change.
+
+### What the hybrid construction is and is not
+
+* The combined root secret is NOT an arbitrary concatenation; the IKM to
+  HKDF-Expand is framed as `transcript || LP(Z_classical) || Z_classical ||
+  LP(Z_pq) || Z_pq` where `LP` is a 2-byte big-endian length prefix. The
+  framing is locked in shared test vectors across the two implementations.
+* We do NOT claim "quantum-proof" or "post-quantum secure" beyond what
+  the implemented construction actually provides. A successful quantum
+  adversary that breaks ML-KEM-768 still has to also break the classical
+  X3DH shared secret to recover the ratchet root. A successful quantum
+  adversary that breaks Ed25519 still has to forge a valid ML-DSA-44
+  binding signature. The two authentication families and the two key
+  agreement families give us defense in depth; the specific security
+  level of the combination is an open research question and we make no
+  precise claim beyond "neither classical-only nor PQ-only compromise
+  breaks the handshake unaided".
+* The hybrid KDF info string (`secure-messaging-hybrid-root-v1`) and
+  the transcript context (`secure-messaging-hybrid-kem-handshake-v1`)
+  are versioned constants; changing them breaks every existing transcript
+  and is gated by tests on both sides.
 
 ## Local history at rest (client)
 

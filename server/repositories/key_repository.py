@@ -25,9 +25,15 @@ class KeyRepository:
         spk_public: bytes,
         spk_sig: bytes,
         opk_public: bytes | None,
+        pq_kem_public: bytes | None = None,
+        pq_sig_public: bytes | None = None,
+        pq_binding_sig: bytes | None = None,
+        protocol_version: int = 1,
     ) -> None:
         db = get_db()
         bundle = await db["key_bundles"].find_one({"user_id": user_id})
+        # Per-upload counter (still bumped; clients use it for cache busting).
+        next_version = (bundle or {}).get("version", 0) + 1
         if bundle is not None:
             await db["key_bundles"].update_one(
                 {"user_id": user_id},
@@ -37,7 +43,11 @@ class KeyRepository:
                         "spk_public": spk_public,
                         "spk_sig": spk_sig,
                         "opk_public": opk_public,
-                        "version": bundle.get("version", 1) + 1,
+                        "pq_kem_public": pq_kem_public,
+                        "pq_sig_public": pq_sig_public,
+                        "pq_binding_sig": pq_binding_sig,
+                        "protocol_version": protocol_version,
+                        "version": next_version,
                         "uploaded_at": datetime.now(timezone.utc),
                     }
                 },
@@ -50,7 +60,11 @@ class KeyRepository:
                 "spk_public": spk_public,
                 "spk_sig": spk_sig,
                 "opk_public": opk_public,
-                "version": 1,
+                "pq_kem_public": pq_kem_public,
+                "pq_sig_public": pq_sig_public,
+                "pq_binding_sig": pq_binding_sig,
+                "protocol_version": protocol_version,
+                "version": next_version,
                 "uploaded_at": datetime.now(timezone.utc),
             }
         )

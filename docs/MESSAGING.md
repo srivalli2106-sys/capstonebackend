@@ -125,3 +125,114 @@ Conversation history *is* persisted locally and encrypted at rest
   the offline queue before being pruned.
 - Live-socket sends have a bounded wait; on timeout the message is queued if
   the recipient is offline-capable, otherwise failed loudly.
+
+## Hybrid classical + post-quantum E2EE
+
+End-to-end sessions are established by an explicitly versioned handshake
+that combines X25519 + Ed25519 (classical) with ML-KEM-768 + ML-DSA-44
+(post-quantum). Two protocol versions are wired through the same code
+path; classical v1 clients interoperate with hybrid v2 peers without
+ever mixing formats.
+
+### Versioned wire format
+
+`session_init` carries an opaque `data` field whose leading byte selects
+the protocol:
+
+| Version | Bytes | Layout |
+| --- | --- | --- |
+| `v1` (classical) | 66 | `version(1) \| ik_x_public_A(32) \| ek_public_A(32) \| opk_index(1; 0xFF = none)` |
+| `v2` (hybrid)    | 2338 | `version(1) \| ik_x_public_A(32) \| kem_ciphertext(1088) \| alice_pq_kem_public(1184) \| ek_public_A(32) \| opk_index(1)` |
+
+The classical SK, AD, and init payload are unchanged from the previous
+protocol; the v2 path adds exactly the ML-KEM-768 ciphertext plus the
+initiator's ML-KEM-768 public key, and the responder decapsulates the
+ciphertext with its own ML-KEM-768 private key to obtain a 32-byte PQ
+shared secret (`Z_pq`). The Double Ratchet, the AEAD, the AD, and every
+other downstream piece are byte-compatible between v1 and v2.
+
+### Key bundle extensions
+
+The key bundle served by `/keys/bundle/{user_id}` now optionally carries
+PQ material:
+
+| Field | Size (hex chars) | Meaning |
+| --- | --- | --- |
+| `pq_kem_public` | 2368 | ML-KEM-768 public key (1184 bytes) |
+| `pq_sig_public` | 2624 | ML-DSA-44 public key (1312 bytes) |
+| `pq_binding_sig`| 4840 | ML-DSA-44 signature (2420 bytes) over the canonical hybrid context |
+| `protocol_version` | 1 digit | `1` = classical only, `2` = hybrid (classical + PQ) |
+
+The classical Ed25519 SPK signature (`spk_sig`) and the ML-DSA binding
+signature over the canonical context
+
+```
+HYBRID_BIND_CONTEXT ("secure-messaging-hybrid-binding-v1")
+  || ik_public || xdh_public || spk_public || protocol_version
+  || pq_kem_public || pq_sig_public
+```
+
+are both verified on the initiating device. The server only validates the
+byte lengths and the classical SPK signature; it does not verify ML-DSA
+signatures (the server has no ML-DSA implementation; verification happens
+on the peer device during the handshake, exactly like every other E2EE
+operation).
+
+### Hybrid KDF
+
+Both sides independently derive the same hybrid root secret via a
+domain-separated, length-prefixed HKDF-SHA256 composition:
+
+```
+transcript = SHA-256(
+    "secure-messaging-hybrid-kem-handshake-v1"
+    || version_tag (1 byte: 1 or 2)
+    || alice_ik_pub || alice_ikx_pub
+    || bob_ik_pub || bob_ikx_pub || bob_spk_pub
+    || bob_pq_kem_public || bob_pq_sig_public,
+)
+
+ikm = transcript
+      || LP(Z_classical) || Z_classical
+      || LP(Z_pq)       || Z_pq
+
+root_secret = HKDF-SHA256(ikm, info="secure-messaging-hybrid-root-v1", length=32)
+```
+
+`LP(x)` is a 2-byte big-endian length prefix so the two 32-byte shared
+secrets can never be confused on concatenation; the `version_tag`
+distinguishes v1 and v2 transcripts. `Z_classical` is the classical X3DH
+shared secret; `Z_pq` is the ML-KEM-768 shared secret. Both sides call
+exactly the same function with exactly the same inputs and obtain
+exactly the same `root_secret`, which feeds the existing Double Ratchet
+unchanged. The construction is documented and pinned in
+`src/crypto/hybridKdf.ts` (and mirrored on the backend in
+`protocol/hybrid_kdf.py`); the two implementations share deterministic
+test vectors and any change requires regenerating both sides together.
+
+### Library and runtime
+
+PQ operations happen ONLY on the device, using
+`@noble/post-quantum` (`ml_kem768` and `ml_dsa44`). PQ private keys are
+generated on the device and persisted only inside the encrypted
+device-keys envelope (PBKDF2-SHA256 + AES-GCM under the passphrase).
+The server never sees a PQ private key, never runs ML-KEM, and never
+verifies ML-DSA signatures.
+
+### Compatibility
+
+* Classical-only clients (`protocol_version == 1`) continue to work
+  without any change.
+* A hybrid peer (`protocol_version == 2`) refuses a v1 peer that
+  advertises PQ material but lacks the binding signature (or has a
+  wrong-length PQ field); the rejection is explicit and surfaces as a
+  `KeyBundleError` so the UI can fall back to classical mode if the
+  user opts in.
+* A v2 INIT payload with malformed or truncated KEM ciphertext is
+  rejected by `parseInitPayloadV2` (size 2338 enforced exactly).
+* There is no silent downgrade: a hybrid session either establishes
+  using the hybrid KDF or fails loudly; the protocol version is
+  cryptographically bound to the transcript.
+
+See `docs/HYBRID_PQ.md` for a more detailed rationale, threat-model
+notes, and the exact wire-format hex examples.

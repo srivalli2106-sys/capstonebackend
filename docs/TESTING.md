@@ -8,8 +8,9 @@
   browser), `test/setup.ts`, tests under `test/**/*.test.ts`.
 - Env for tests: `VITE_API_BASE_URL=https://api.example.test`,
   `VITE_WS_BASE_URL=wss://ws.example.test`.
-- Coverage today: 19 test files, 228 `it`/`test`, 71 `describe` (includes
-  `fake-indexeddb`-backed encrypted history tests).
+- Coverage today: 22 test files, ~250 `it`/`test`, 75 `describe` (includes
+  `fake-indexeddb`-backed encrypted history tests and the hybrid PQ
+  crypto suites).
 
 Scope:
 
@@ -19,6 +20,7 @@ Scope:
 | auth + api clients | `test/auth*`, `test/api*` |
 | realtime controllers/components | `test/realtime*`, `test/components*` |
 | encrypted local history | `test/chatStore.test.ts`, `test/chatHistory.test.ts` |
+| hybrid classical + post-quantum | `test/pq.test.ts`, `test/hybridKdf.test.ts`, `test/x3dhV2.test.ts`, `test/hybridSession.test.ts`, `test/keyBundlePq.test.ts` |
 | routing/state/bootstrap | `test/router*`, `test/app*`, `test/setup*` |
 
 Notable patterns:

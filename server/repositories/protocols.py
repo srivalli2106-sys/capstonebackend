@@ -26,6 +26,10 @@ class KeyRepository(Protocol):
         spk_public: bytes,
         spk_sig: bytes,
         opk_public: bytes | None,
+        pq_kem_public: bytes | None = ...,
+        pq_sig_public: bytes | None = ...,
+        pq_binding_sig: bytes | None = ...,
+        protocol_version: int = ...,
     ) -> None: ...
 
     async def get_key_bundle(self, user_id: str) -> dict | None: ...

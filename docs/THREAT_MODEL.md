@@ -40,6 +40,12 @@
 | Forward secrecy breach | per-ratchet, per-message keys; old keys discarded | none (in-memory only) |
 | DoS / ab/use | HTTP rate limits (fail closed) + WS rate gates + timeouts | Redis-out WS degrades open |
 | Device theft | passphrase-gated unlock; keys in memory only | machine-level compromise of the browser process |
+| Quantum attacker on classical X3DH | ML-KEM-768 shared secret still secures the hybrid root (assuming ML-KEM-768 unbroken) | ML-KEM-768 cryptanalysis advances (FIPS 203) |
+| Classical attacker on ML-KEM-768 | X25519 DH still secures the hybrid root | ECDLP break (negligible in practice) |
+| Signature forgery on Ed25519 | ML-DSA-44 binding signature still authenticates the bundle | ML-DSA-44 cryptanalysis advances (FIPS 204) |
+| Signature forgery on ML-DSA-44 | Ed25519 SPK signature still authenticates the bundle | large-scale quantum computer against Ed25519 |
+| Silent hybrid → classical downgrade | `protocol_version` is cryptographically bound into the transcript and the binding sig; the KDF rejects v1 transcripts when v2 was negotiated | none observed |
+| Bundle material swap (tamper PQ pubs in transit) | ML-DSA binding sig covers all bundle fields; Ed25519 SPK sig covers `ik || xdh || spk` | full key compromise |
 | Local history leak (offline) | AES-256-GCM at rest, key from device identity, non-extractable, account bound | device key + passphrase both compromised |
 | Local history tampering | AEAD with AD bound to both account ids; tampered rows skipped | none beyond silent loss of that row |
 | UI spoofing / phishing | server-authoritative envelopes, verified sender | contested-identity handling is out of scope |

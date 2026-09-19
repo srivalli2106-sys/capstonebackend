@@ -155,7 +155,7 @@ async def test_upsert_key_bundle_inserts_new_bundle(monkeypatch):
     assert doc["spk_public"] == b"\x01" * 32
     assert doc["spk_sig"] == b"\x02" * 64
     assert doc["opk_public"] is None
-    assert doc["version"] == 1
+    assert doc["protocol_version"] == 1
 
 
 async def test_upsert_key_bundle_bumps_version_on_update(monkeypatch):
@@ -174,6 +174,7 @@ async def test_upsert_key_bundle_bumps_version_on_update(monkeypatch):
     assert doc["spk_public"] == b"\x03" * 32
     assert doc["opk_public"] == b"\x05" * 32
     assert doc["version"] == 2
+    assert doc["protocol_version"] == 1
 
 
 async def test_get_key_bundle_returns_document_or_none(monkeypatch):

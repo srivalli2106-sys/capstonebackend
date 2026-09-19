@@ -46,20 +46,34 @@ any other peer.
 
 ## Initiation frame
 
-The initiator ships its identity and ephemeral public keys inside a fixed
-66-byte binary frame:
+The initiator ships its identity and ephemeral public keys inside a
+versioned binary frame. The leading version byte selects between the
+classical (v1) and the hybrid classical + post-quantum (v2) handshakes.
 
 ```
-version(1) | IKX_A(32) | EK_A(32) | opk_index(1)
+v1 (66 bytes)  = version(1) | IKX_A(32) | EK_A(32) | opk_index(1)
+v2 (2338 bytes) = version(1) | IKX_A(32) | kem_ciphertext(1088)
+                 | alice_pq_kem_pub(1184) | EK_A(32) | opk_index(1)
 ```
 
-- `version` is 1. Anything else is rejected (`unsupported_version`).
+- `version` is 1 (classical) or 2 (hybrid). Anything else is rejected
+  with `unsupported_version`.
 - `opk_index` is the index of the OPK that was used, or `0xFF` when no OPK
   was used.
-- Built with `>` big-endian struct `>B 32s 32s B` on the backend and a byte
+- Built with `>` big-endian struct on the backend
+  (`>B 32s 32s B` for v1, `>B 32s 1088s 1184s 32s B` for v2) and a byte
   array on the frontend.
 - On the wire it is base64url-encoded into a `session_init` envelope's
   `data` field.
+
+The v2 payload adds the ML-KEM-768 ciphertext (1088 bytes) the initiator
+produced by encapsulating to the responder's `pq_kem_public`, plus the
+initiator's own ML-KEM-768 public key (1184 bytes). The responder
+decapsulates the ciphertext with its own ML-KEM-768 private key to
+recover the 32-byte `Z_pq` shared secret. Both sides then compose the
+hybrid root secret via the construction in `protocol/hybrid_kdf.py`
+(mirrored on the frontend in `src/crypto/hybridKdf.ts`) and feed it
+into the existing Double Ratchet unchanged.
 
 ## Initiator steps (`x3dhInitiate`)
 

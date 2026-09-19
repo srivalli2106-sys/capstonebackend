@@ -47,14 +47,23 @@ Honest account of what the capstone does not do, and why.
 
 - **Metadata is visible** (sender, recipient, timestamps, envelope types,
   typing) to the server even though payloads are opaque.
-- **Client-side crypto** relies on Web Crypto + `@noble/curves`; audit is
-  manual and pinned dependencies are the only guard against supply-chain
-  compromise.
+- **Client-side crypto** relies on Web Crypto + `@noble/curves` +
+  `@noble/post-quantum`; audit is manual and pinned dependencies are the
+  only guard against supply-chain compromise.
 - **JWT via HS256** means one shared secret across instances (deployed
   single-process).
 - **WS rate gates degrade open** on a Redis outage (delivery preserved over
   strict metering); HTTP paths stay fail-closed.
 - No CSP/`Trusted Types` hardening in the built bundle.
+- The hybrid KDF's combined security level is not formally analyzed;
+  the construction is documented in `docs/HYBRID_PQ.md` and pinned by
+  shared deterministic test vectors, but no precise "bits of security"
+  claim is made for the combination.
+- The ML-DSA binding signature is verified on the peer device only; the
+  server does not have an ML-DSA implementation and validates the bundle
+  structurally (byte lengths and the classical Ed25519 SPK signature).
+- PQ mode is opt-in. Classical-only clients continue to work with the
+  previous protocol byte-for-byte.
 
 ## Deployment constraints
 

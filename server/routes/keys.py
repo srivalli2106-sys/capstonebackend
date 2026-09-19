@@ -34,12 +34,15 @@ router = APIRouter(prefix="/keys", tags=["keys"])
 # ---------------------------------------------------------------------------
 
 
-# spk_public/opk_public/xdh_public are hex-encoded 32-byte X25519 key material
-# = 64 hex chars. spk_sig is a hex-encoded 64-byte Ed25519 signature = 128 hex
-# chars. The byte-length checks in the service already enforce the fixed size;
-# these caps keep oversized strings from being parsed in the first place.
+# Classical key sizes (hex-encoded): 32 bytes = 64 hex chars.
+# PQ public keys: ML-KEM-768 = 1184 bytes = 2368 hex chars;
+#               ML-DSA-44 = 1312 bytes = 2624 hex chars.
+#               ML-DSA-44 sig  = 2420 bytes = 4840 hex chars.
 _MAX_KEY_HEX_LENGTH = 64
 _MAX_SIGNATURE_HEX_LENGTH = 128
+_PQ_KEM_HEX_LENGTH = 2368
+_PQ_SIG_HEX_LENGTH = 2624
+_PQ_SIG_SIG_HEX_LENGTH = 4840
 
 
 class UploadKeyBundleRequest(BaseModel):
@@ -52,6 +55,20 @@ class UploadKeyBundleRequest(BaseModel):
     opk_public: str | None = Field(
         default=None, max_length=_MAX_KEY_HEX_LENGTH
     )  # hex, nullable
+    # --------------------------------------------------------------------
+    # Post-quantum material (optional; included for hybrid v2 mode).
+    # Defaults are all None so existing classical clients work unchanged.
+    # --------------------------------------------------------------------
+    pq_kem_public: str | None = Field(
+        default=None, max_length=_PQ_KEM_HEX_LENGTH
+    )  # hex ML-KEM-768 public key (1184 bytes)
+    pq_sig_public: str | None = Field(
+        default=None, max_length=_PQ_SIG_HEX_LENGTH
+    )  # hex ML-DSA-44 public key (1312 bytes)
+    pq_binding_sig: str | None = Field(
+        default=None, max_length=_PQ_SIG_SIG_HEX_LENGTH
+    )  # hex ML-DSA-44 signature (2420 bytes)
+    protocol_version: int = Field(default=1)  # 1 = classical, 2 = hybrid
 
 
 class KeyBundleResponse(BaseModel):
@@ -61,7 +78,10 @@ class KeyBundleResponse(BaseModel):
     spk_public: str   # hex
     spk_sig: str      # hex
     opk_public: str | None = None  # hex
-    version: int
+    pq_kem_public: str | None = None  # hex ML-KEM-768 public key (1184 bytes)
+    pq_sig_public: str | None = None  # hex ML-DSA-44 public key (1312 bytes)
+    pq_binding_sig: str | None = None  # hex ML-DSA-44 signature (2420 bytes)
+    protocol_version: int  # 1 = classical, 2 = hybrid
 
 
 class OPKStatusResponse(BaseModel):
@@ -91,6 +111,10 @@ async def upload_key_bundle(
         body.spk_public,
         body.spk_sig,
         body.opk_public,
+        body.pq_kem_public,
+        body.pq_sig_public,
+        body.pq_binding_sig,
+        body.protocol_version,
     )
     return {"status": "ok", "user_id": user_id}
 
