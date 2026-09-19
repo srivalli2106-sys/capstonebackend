@@ -74,3 +74,18 @@ in `THREAT_MODEL.md`.
   (`secure-messaging-signed-prekey-v1`) preventing signature reuse across
   apps/roles.
 - OPKs are single-use and consumed atomically server-side.
+
+## Local history at rest (client)
+
+- Chat history is persisted locally under a **dedicated** IndexedDB database
+  (`secure-messaging-chat`) and is AES-256-GCM encrypted at rest.
+- The storage key is HKDF-SHA256 of the device's X25519 identity private key
+  (`ikx`) with a domain-separated context (`secure-messaging-chat-history-v1`
+  + account); the derived AES-GCM key is imported **non-extractable**, so it
+  cannot be read out of the Web Crypto boundary.
+- Rows are authenticated data (AD = context + `selfUserId` + `peerUserId`):
+  one account/device key cannot decrypt another's rows, and tampered rows are
+  skipped rather than surfaced.
+- Plaintext never touches disk: records carry only iv/ciphertext hex plus
+  envelope metadata. The store drops its key on lock/logout, so local history
+  is unreadable while the device is locked.

@@ -8,7 +8,8 @@
   browser), `test/setup.ts`, tests under `test/**/*.test.ts`.
 - Env for tests: `VITE_API_BASE_URL=https://api.example.test`,
   `VITE_WS_BASE_URL=wss://ws.example.test`.
-- Coverage today: 16 test files, 196 `it`/`test`, 67 `describe`.
+- Coverage today: 19 test files, 228 `it`/`test`, 71 `describe` (includes
+  `fake-indexeddb`-backed encrypted history tests).
 
 Scope:
 
@@ -17,6 +18,7 @@ Scope:
 | crypto (X3DH, ratchet, KDF, identity store) | `test/crypto*`, `test/identity*` |
 | auth + api clients | `test/auth*`, `test/api*` |
 | realtime controllers/components | `test/realtime*`, `test/components*` |
+| encrypted local history | `test/chatStore.test.ts`, `test/chatHistory.test.ts` |
 | routing/state/bootstrap | `test/router*`, `test/app*`, `test/setup*` |
 
 Notable patterns:

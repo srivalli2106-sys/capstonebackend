@@ -8,9 +8,15 @@ Honest account of what the capstone does not do, and why.
   X3DH root are never persisted. An app restart or reload forces a fresh
   `session_init`. `export()`/`import()` exist and are tested but are not wired
   into the app.
-- **No history persistence.** Messages are not stored client- or server-side
-  beyond the offline queue TTL. Reloading clears the viewport (the server
-  still holds ciphertext in `pending:{user_id}` until the peer reconnects).
+- **History is persisted, but locally and per-device.** Conversation history
+  survives reload via an AES-256-GCM IndexedDB store (`secure-messaging-chat`)
+  bound to the device identity key. Limitations that remain:
+  - no cross-device sync: the rows live on one device only;
+  - no restore-to-new-device path: a lost passphrase or wiped device makes
+    local history unrecoverable (no back-up by design);
+  - deletes are local-only (delete-for-me, delete-conversation): ciphertext
+    still queued on the server or held by the peer is not removed;
+  - the offline queue still holds server-side ciphertext until TTL/prune.
 - **Export format caveat.** Frontend and backend serialize ratchet/session
   state with slightly different AD-length packing (`>B 8B…` vs `>B B B I`);
   the formats are verified per side, but byte-level cross-compatibility is

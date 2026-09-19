@@ -58,7 +58,9 @@ Frontend session state lives in `src/crypto/e2eeSession.ts`
   into one byte plus padding). Treat the formats as test-only.
 - Consequence: an app restart loses all sessions, so conversations resume via
   a fresh `session_init`. This is a deliberate limitation (see
-  `LIMITATIONS.md`).
+  `LIMITATIONS.md`). Conversation *history* is separate and IS persisted
+  encrypted at rest (`src/persistence/chatStore.ts`), so the thread rehydrates
+  on reload even though the session must be re-established before sending.
 
 ## Multiple devices and reconnects
 

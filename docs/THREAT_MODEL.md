@@ -9,6 +9,7 @@
 | passphrase | unlock identity seed |
 | JWT | session hijack, impersonation |
 | sessions / ratchet state | derive keys, decrypt an active conversation |
+| local chat history (ciphertext at rest) | read a stored thread (needs the device key + passphrase-gated unlock) |
 | user metadata | fingerprint users, build profiles |
 
 ## Adversary classes
@@ -39,12 +40,21 @@
 | Forward secrecy breach | per-ratchet, per-message keys; old keys discarded | none (in-memory only) |
 | DoS / ab/use | HTTP rate limits (fail closed) + WS rate gates + timeouts | Redis-out WS degrades open |
 | Device theft | passphrase-gated unlock; keys in memory only | machine-level compromise of the browser process |
+| Local history leak (offline) | AES-256-GCM at rest, key from device identity, non-extractable, account bound | device key + passphrase both compromised |
+| Local history tampering | AEAD with AD bound to both account ids; tampered rows skipped | none beyond silent loss of that row |
 | UI spoofing / phishing | server-authoritative envelopes, verified sender | contested-identity handling is out of scope |
 
 ## Residual risks (documented limitations)
 
-- **No persistence**: sessions and history are memory-only; an app restart
-  forces a fresh X3DH handshake. See `LIMITATIONS.md`.
+- **Session ratchet state not persisted**: sessions and ratchet state are
+  memory-only; an app restart forces a fresh X3DH handshake. Conversation
+  history is persisted encrypted at rest, but **sessions are never saved**.
+- **History is single-device and local-only**: no cloud sync; the stored rows
+  are bound to one device key. A lost passphrase/identity means the local
+  history is unrecoverable (consistent with the no-recovery rule).
+- **"Delete" is local-only**: delete-for-me and delete-conversation remove
+  local state; they do not delete ciphertext queued on the server or on the
+  peer's device.
 - **Metadata leakage**: recipients, senders, timestamps, frame types, and
   typing indicators are visible to the server as metadata.
 - **Client-side crypto review burden**: Web Crypto / noble-curves / a package
@@ -57,7 +67,8 @@
 
 ## Recommended follow-ups
 
-- Session persistence (encrypted at rest) to survive restarts.
+- Session persistence (encrypted at rest) to survive restarts (history is now
+  persisted; ratchet/session state is not).
 - Key rotation endpoint (`/keys/rotate`) and revocation UX.
 - DoS guards per-socket and per-IP byte budgets; WS auth backoff.
 - Content Security Policy + `Trusted Types` hardening.

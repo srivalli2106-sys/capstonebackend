@@ -126,6 +126,7 @@ pending queue is flushed to the socket. See `MESSAGING.md`.
 | `WebSocketClient` | raw socket, first-frame auth, send, close |
 | `WebSocketController` | lifecycle, backoff/retry, reconnect policy, auth integration |
 | `ChatController` | sessions, encryption dispatch, decryption, receipts |
+| `persistence/chatStore.ts` | AES-256-GCM local history (encrypted at rest, separate DB) |
 | `setup.ts` | transport wiring (`setRealtimeTransport`), singleton lifecycle |
 | `messageId.ts` | ULID-style message ids (see `MESSAGING.md`) |
 | `types.ts` | envelope + close-code constants |

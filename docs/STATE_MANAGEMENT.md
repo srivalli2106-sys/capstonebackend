@@ -61,7 +61,8 @@ up-to-date after device changes.
 - Envelope dispatch: `session_init`/`session_accept`/`text`/`file`/
   `delivery_receipt`/`read_receipt`/`typing`.
 - Receipts are applied to in-memory message status; no receipt data is
-  persisted.
+  persisted. Message status and read/unread state ARE folded into the
+  encrypted local history store so a reload restores the thread's ticks.
 - Lock/logout/dispose clears the whole map (sessions are ephemeral by design).
 
 ## State reset paths
@@ -71,11 +72,12 @@ up-to-date after device changes.
 | `lock()` | identity keys, sessions, JWT (then `disposeRealtimeTransport`) |
 | `logout()` | same + server-side JWT revocation |
 | `disposeRealtimeTransport()` | transports, singletons reset |
-| app reload | memory state; IndexedDB identity survives; JWT in sessionStorage survives per tab |
+| app reload | memory state; IndexedDB identity survives; encrypted history (`secure-messaging-chat`) survives; JWT in sessionStorage survives per tab |
 
 ## Data-down, actions-up
 
 - HTTP flows (`api/*`) return typed results to controllers; controllers
   mutate their own state; pages re-render from bound selectors.
-- Standalone features (contacts, conversation list, history) are intentionally
-  out of scope, so there is no reload/pagination machinery to duplicate.
+- Standalone features (contacts, conversation list metadata beyond the stored
+  thread, pagination) are intentionally out of scope; conversation history is
+  handled by `src/persistence/chatStore.ts` (see `MESSAGING.md`).

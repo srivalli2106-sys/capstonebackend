@@ -69,11 +69,30 @@ Alice                          Server                  Bob
 
 Server treats both frames like any envelope; it never inspects `data`.
 
+## Local history flow (encrypted at rest)
+
+```
+Alice unlocks with her passphrase
+  -> identity/device keys restored (IndexedDB secure-messaging)
+  -> ChatController.maybeHydrate -> chatStore.unlock(ikxPrivate)
+     key = HKDF-SHA256(ikxPrivate, info="secure-messaging-chat-history-v1" + self)
+     -> loads per-peer AES-256-GCM ciphertext rows (secure-messaging-chat)
+Conversation gains a message / receipt / read state
+  -> markDirty(peer) -> debounced 400 ms -> chatStore.save (ciphertext only)
+Delete conversation / message-for-me  -> local row/message removed
+Logout / lock                    -> flush pending saves -> chatStore.lock (key dropped)
+Reload                          -> history restores; session re-established via session_init
+```
+
+Only ciphertext and envelope metadata (ids, timestamps) touch IndexedDB
+`secure-messaging-chat`; plaintext exists only in JS memory.
+
 ## Where data lives per stage
 
 | Stage | Storage |
 | --- | --- |
-| Browser, at rest | IndexedDB `secure-messaging` (wrapped identity + device keys only; no messages) |
+| Browser, at rest — identity | IndexedDB `secure-messaging` (wrapped identity + device keys only) |
+| Browser, at rest — history | IndexedDB `secure-messaging-chat` (AES-256-GCM ciphertext only, bound to the device identity key) |
 | Browser, session | `sessionStorage` JWT + user_id |
 | Browser, memory | identities (keys), sessions, chat view |
 | Wire | opaque ciphertext in server-authoritative envelopes |

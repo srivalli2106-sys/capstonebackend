@@ -80,6 +80,32 @@ In-memory session store: sessions live in `ChatController` and are cleared on
 lock, logout, and app teardown. Nothing is persisted to disk (see
 `SESSION_MANAGEMENT.md` and `LIMITATIONS.md`).
 
+## Local history (encrypted at rest)
+
+Conversation history *is* persisted locally and encrypted at rest
+(`src/persistence/chatStore.ts`), separate from the identity store:
+
+- Database `secure-messaging-chat`, object store `conversations`, record key
+  `"<selfUserId>::<peerUserId>"`. A record stores only `selfUserId`,
+  `peerUserId`, `updatedAt`, `ivHex`, `ciphertextHex` — never plaintext.
+- The cipher is AES-256-GCM. The key is derived from the device's X25519
+  identity private key (`ikx`) via HKDF-SHA256 with the domain-separated
+  context `secure-messaging-chat-history-v1<separator><selfUserId>`, imported
+  non-extractable, so it never leaves the Web Crypto boundary.
+- The associated data binds each ciphertext to `selfUserId` and `peerUserId`;
+  one device key cannot decrypt another account's rows.
+- Writes happen on a 400 ms debounce after send/receive/receipt/read changes.
+  `deleteConversation` removes the row and closes the in-memory session;
+  "delete for me" removes the message from the local thread only. Logout or
+  identity lock flushes pending saves first, then locks the store and drops
+  the key.
+- Outbound messages persisted mid-send (`sending`) restore as `failed`, never
+  as a falsely confirmed status. Undecryptable or tampered rows are skipped
+  silently so storage corruption cannot break chat.
+- Sessions/ratchet state are **not** persisted: on reload the peer
+  re-establishes a session via `session_init` before the restored thread can
+  send again.
+
 ## Read/delivery receipts
 
 - Receipts reference the original `id` and are relayed the same way.

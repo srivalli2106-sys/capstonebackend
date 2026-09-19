@@ -7,7 +7,10 @@ A full-stack, end-to-end encrypted chat application:
 - **Frontend** (React 18 + TypeScript + Vite): identity creation and
   passphrase-gated unlock, X3DH + Double Ratchet implementation, key bundle
   management, authenticated WebSocket transport with a typed reconnect
-  policy, in-memory session management, receipts and typing indicators.
+  policy, encrypted-at-rest local history, in-memory session management,
+  receipts and typing indicators, and a WhatsApp-style chat UI (date
+  separators, typing bubble, scroll/jump-to-latest, delete-for-me and
+  delete-conversation with confirmation).
 - **Backend** (Python 3.11 + FastAPI + MongoDB + Redis): proof-of-possession
   auth (challenge/verify, JWT), key bundle distribution with atomic OPK
   consumption, server-authoritative envelope relay, replay de-duplication,
@@ -25,7 +28,7 @@ A full-stack, end-to-end encrypted chat application:
 | Cryptographic correctness | X3DH + Double Ratchet, AES-256-GCM, HKDF/PBKDF2; identical constants verified on both sides |
 | Real-time messaging | WebSocket relay, offline queuing, ordered/reordered delivery via skip keys |
 | Security posture | PoP auth, JWT revocation, fail-closed defaults, opaque payloads, typed errors |
-| Test coverage | 379 backend tests (including 8 integration) + 196 frontend cases; cross-implementation protocol vectors |
+| Test coverage | 379 backend tests (including 8 integration) + 228 frontend cases; cross-implementation protocol vectors |
 | Deployability | Production URLs, health/readiness probes, documented env secrets handling |
 
 ## What works end to end
@@ -36,6 +39,9 @@ A full-stack, end-to-end encrypted chat application:
    two endpoints.
 4. Offline delivery via Redis queue; reconnects flush pending ciphertext.
 5. Receipts/typing relayed; rate limits and close codes drive the UX.
+6. Conversation history survives reload, encrypted at rest on the device; on
+   relaunch the thread rehydrates and the session re-establishes before
+   sending resumes.
 
 ## What is proven
 
@@ -47,25 +53,27 @@ A full-stack, end-to-end encrypted chat application:
 
 ## What is missing (see `LIMITATIONS.md`)
 
-- Session/history persistence, key rotation, recovery, contacts/groups/
-  attachments, notifications, admin tooling, group E2EE schemes.
+- Session/ratchet persistence, cross-device history sync, key rotation,
+  recovery, contacts/groups/attachments, notifications, admin tooling, group
+  E2EE schemes.
 
 ## Reflections
 
 - The strongest design decision was the byte-pinned cross-implementation
   protocol with shared HKDF domain separation; it turned "two teams' crypto"
   into one testable spec and made failures localize cleanly.
-- The main trade-off accepted: no persistence, in exchange for a firmer
-  security boundary (keys never leave memory). Future work should address
-  encrypted-at-rest sessions and key rotation while preserving the same
-  invariants.
+- The main trade-off accepted: encrypted-at-rest history keeps the thread
+  across reloads while keys still never leave memory unprotected; ratchet
+  state remains deliberately unpersisted for forward secrecy. Future work
+  should address session persistence and key rotation while preserving the
+  same invariants.
 - Client-side crypto was implemented against Web Crypto + `@noble/curves`
   and independently mirrored in `protocol/` using `cryptography`; the two
   implementations double-check each other in CI.
 
 ## Future work
 
-- Encrypted session persistence + import/export UX; key rotation endpoints
-  and revocation UI; group messaging (Sender Keys/MLS-style E2EE); web push
-  for offline recipients; CSP/Trusted Types; multi-replica deployment with a
-  stateless WS broker.
+- Encrypted session persistence + cross-device history sync + import/export
+  UX; key rotation endpoints and revocation UI; group messaging (Sender
+  Keys/MLS-style E2EE); web push for offline recipients; CSP/Trusted Types;
+  multi-replica deployment with a stateless WS broker.
