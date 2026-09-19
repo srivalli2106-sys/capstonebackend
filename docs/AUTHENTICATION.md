@@ -1,129 +1,127 @@
 # Authentication
 
-How a client proves who it is, gets a token, and is checked on every protected
-operation. Implemented in `server/auth_service.py`, `server/jwt_auth.py`,
-`server/auth_store.py`, and wired in `server/routes/auth.py`.
+The production authentication path is proof of possession (PoP): a client
+proves it holds the private half of the Ed25519 identity key it registered,
+by signing a server-issued nonce.
 
----
+## Endpoints
 
-## 1. Identity model
+All bodies are JSON. Rate limits apply per endpoint (see `RATE_LIMITING.md`).
 
-- Each user registers **once** with a `user_id` and the 64-hex-char public half
-  of an **Ed25519 identity key** (`ik_public`, 32 bytes). A unique index on
-  `user_id` makes re-registration impossible (409).
-- The device keeps the Ed25519 private key; the server stores only the public
-  half and uses it to verify proof of possession.
+### POST /auth/register
 
-## 2. Production login: proof of possession (challenge/verify)
+Creates a user with its registered Ed25519 public identity key.
 
-```
-POST /auth/challenge  { "user_id": "alice" }
-  → checks the user exists, then stores a fresh 32-byte random nonce
-    (auth_challenge:alice, TTL = AUTH_CHALLENGE_TTL_SECONDS, 120 s by default)
-  → 200 { "user_id": "alice", "nonce": "<64 hex chars>" }
-
-(client signs the nonce with its Ed25519 private key)
-
-POST /auth/verify  { "user_id": "alice", "nonce": "<hex>", "signature": "<hex>" }
-  → atomically consumes the challenge (single-use, see below)
-  → verifies the 64-byte Ed25519 signature against ik_public
-  → 200 { "token": "<JWT>", "user_id": "alice" }
+```json
+// request
+{ "user_id": "alice", "ik_public": "<64 hex chars>" }
+// 201
+{ "status": "registered", "user_id": "alice" }
+// 409 conflict
+{ "error": { "code": "conflict", "message": "...", "request_id": "..." } }
 ```
 
-- **One outstanding challenge per user**: a new `/challenge` replaces the
-  previous one.
-- **Atomic consumption**: the nonce is removed with `GETDEL` (or a Lua fallback
-  on Redis < 6.2). A replayed challenge can never succeed, even concurrently.
-- **Fail closed**: unknown user, bad hex, wrong size, missing/replayed/expired
-  challenge, and invalid signature all return the identical
-  `401 {"error":{"code":"http_401","message":"Authentication failed",...}}`.
-  Nothing about the failure reason leaks.
-- A Redis error during this path propagates as `503 dependency_unavailable`
-  (never "accept").
+- `user_id` bounded to 64 characters; unique index enforces one registration.
+- `ik_public` is the hex form of the RFC 8032 Ed25519 public key (32 bytes ->
+  64 hex chars). The backend does not verify the key at registration; it is
+  verified later when a signature arrives.
+- `user_id` is also used as a MongoDB document key and a Redis key suffix.
 
-## 3. Development login (local/test convenience)
+### POST /auth/login (development/test only)
 
+Returns a JWT for any existing user without proof of possession. Hard-disabled
+when `APP_ENV=production` (HTTP 403). Production clients must never use it.
+
+### POST /auth/challenge
+
+```json
+// request
+{ "user_id": "alice" }
+// 200
+{ "user_id": "alice", "nonce": "<64 hex chars = 32 random bytes>" }
+// 404 not_found  (unknown user)
 ```
-POST /auth/login  { "user_id": "alice" }
-  → returns a JWT for any EXISTING user, no proof of possession
+
+- Nonce is 32 random bytes, hex-encoded (64 chars).
+- Challenge is stored in Redis (`auth_challenge:{user_id}`) with a TTL of
+  `AUTH_CHALLENGE_TTL_SECONDS` (default 120s).
+
+### POST /auth/verify
+
+```json
+// request
+{ "user_id": "alice", "nonce": "<64 hex>", "signature": "<128 hex>" }
+// 200
+{ "token": "<jwt>", "user_id": "alice" }
+// 401  Authentication failed  (generic, always)
 ```
 
-- Enabled in `APP_ENV=development` and `test` only.
-- **Returns HTTP 403 in production**; production clients must use the
-  challenge/verify flow.
-- Purpose: lets you exercise Swagger and manual workflows locally without a
-  client that can sign.
+- The signature is a raw Ed25519 signature over the RAW 32 nonce bytes
+  (`bytes.fromhex(nonce_hex)`), NOT the ASCII hex string. The frontend signs
+  the decoded bytes (see `AuthController.runChallengeVerifyAgainstUnlocked`).
+- The challenge is consumed ATOMICALLY before signature verification, so a
+  challenge is single-use even against signature-oracle attempts.
+- Every failure path returns the identical message `Authentication failed`
+  with 401: unknown user, malformed hex, wrong lengths (nonce != 32 bytes or
+  signature != 64 bytes), missing/replayed/expired challenge, or bad
+  signature. Nothing about the failure reason is leaked.
 
-## 4. JWT format (`server/jwt_auth.py`)
+### POST /auth/logout
 
-Tokens are `PyJWT` HMAC JWTs. Every issued token carries:
+Bearer-token protected. Revokes the token's `jti` in Redis
+(`auth_revoked:{jti}`) for the remaining token lifetime.
+
+```json
+{ "status": "logged_out" }
+```
+
+## JWT
+
+Created and verified in `server/jwt_auth.py`.
 
 | Claim | Meaning |
-|-------|---------|
-| `sub` | `user_id` (authoritative) |
-| `iss` | `JWT_ISSUER` (default `secure-messaging-api`), validated on every verify |
-| `iat` | issued-at (epoch seconds) |
-| `exp` | `iat + JWT_EXPIRY_HOURS * 3600` |
-| `jti` | unique random token id (`secrets.token_urlsafe(16)`) used for revocation |
-| `user_id` | legacy duplicate of `sub` kept for existing consumers |
+| --- | --- |
+| `sub` | user_id |
+| `iss` | configured issuer (`JWT_ISSUER`), validated on verify |
+| `iat` | issued-at epoch seconds |
+| `exp` | expiry epoch seconds (`JWT_EXPIRY_HOURS`, default 24h) |
+| `jti` | cryptographically random token id (128 bits) for revocation |
+| `user_id` | legacy mirror claim, kept equal to `sub` for consumers |
 
-Verification (every path that checks a token):
+Verification:
 
-- signature — pinned to the **configured** algorithm (`HS256|HS384|HS512`);
-  the `algorithms=[JWT_ALGORITHM]` list accepts exactly one value, so `none`
-  and mixed-algorithm attacks are impossible;
-- `iss` — must equal `JWT_ISSUER`;
-- all required claims `{sub, iss, iat, exp, jti}` present and type-safe.
+- Pins the configured algorithm (HS256 default; only HS256/384/512 accepted).
+- Requires the full claim set (`sub`, `iss`, `iat`, `exp`, `jti`).
+- Validates the issuer.
+- Rejects expired signatures and maps every failure to HTTP 401 with a stable
+  message (`Token expired` / `Invalid token`). No token bytes, algorithms, or
+  internal detail are logged or returned.
 
-Failures are collapsed to stable `401` messages ("Token expired" / "Invalid
-token"); token bytes, algorithms, and internals are never logged or returned.
+Revocation is checked by `AuthService.require_auth` (HTTP) and
+`ws_auth.verify_ws_token` (WebSocket). A Redis error during the revocation
+check fails closed: HTTP routes propagate 503; the WebSocket handshake
+rejects with 4001. Tokens are never silently accepted when revocation state
+cannot be verified.
 
-## 5. Revocation & logout
+## Frontend integration
 
-- `POST /auth/logout` (Bearer JWT) blacklists the token's `jti` for **the rest
-  of its lifetime** (`auth_revoked:{jti}`, TTL = `exp - now`, clamped to ≥ 1 s).
-- `require_auth` checks the blacklist on every protected HTTP route.
-- WebSocket connections re-check revocation periodically and close (4001) when
-  a token is revoked (see [WEBSOCKET.md](WEBSOCKET.md)).
-- Revocation TTL is bounded by token lifetime — the blacklist never grows
-  unbounded.
+- `AuthController.register` performs: local identity creation, backend
+  register, then PoP login, with rollback of the local record on failure.
+- `AuthController.login` unlocks locally FIRST (wrong passphrase never reaches
+  the backend, which avoids leaking user existence), then runs PoP.
+- A JWT is persisted in `sessionStorage` (`secure-messaging:jwt` +
+  `secure-messaging:user_id`) so reloads inside a tab keep the session; it is
+  never stored in `localStorage`.
+- A single 401 hook clears the session when any API call or WebSocket
+  handshake fails authentication (`/auth/logout` responses are excluded from
+  the hook).
+- Identity unlock state is tracked separately from JWT state; the transport
+  disconnects when the identity is locked even if the JWT is still valid.
 
-## 6. Protected HTTP routes
+## Security properties
 
-| Route | Protection |
-|-------|------------|
-| `POST /keys/upload` | `require_auth` |
-| `GET /keys/bundle/{user_id}` | `require_auth` |
-| `GET /keys/prekeys/{user_id}` | `require_auth` |
-| `POST /auth/logout` | `require_auth` |
-| `GET /auth/challenge` `/verify` | public (rate-limited) |
-
-`require_auth` (`server/auth_service.py`) is the centralized FastAPI
-dependency: verifies signature/algorithm/issuer/expiry/required claims **and**
-revocation. If the revocation read fails (Redis down) it raises `503` — a token
-is never silently accepted. Unauthenticated requests get
-`401 Missing bearer token`.
-
-## 7. WebSocket authentication relationship
-
-The WebSocket handshake uses the **same** tokens (`verify_access_token` +
-revocation via `is_token_revoked`) but the token is sent as the **first frame**
-(`{"type":"auth","token":"<JWT>"}`), not in the query string. Verification is
-strictly fail-closed; failures close the socket with `4001`. Details in
-[WEBSOCKET.md](WEBSOCKET.md).
-
-## 8. Dependencies
-
-| Dependency | Used for | Failure |
-|------------|----------|---------|
-| Redis | challenge storage + atomic consume; revocation blacklist | Fail closed (503 / 4001) |
-| MongoDB | user lookup (`ik_public`, existence) | 503 dependency_unavailable |
-
-## 9. Security notes
-
-- Ed25519 is used only for **signing/verification** (identity). X3DH identity
-  keys (X25519 `IKX`) are a separate, client-held key — see
-  [E2EE.md](E2EE.md).
-- Knowing a user's `ik_public` does not grant login: the challenge is bound to
-  the private key via the signature.
-- Tokens are opaque to the server; only `jti` is tracked for revocation.
+- The challenge TTL is short by design: a stolen challenge is only usable for
+  that window.
+- The challenge nonce is fresh per request and single-use.
+- Because verification is fail-closed and generic, this endpoint gives an
+  attacker no oracle for user existence or failure detail.

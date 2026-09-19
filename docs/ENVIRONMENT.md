@@ -1,131 +1,109 @@
-# Environment Variables
+# Environment
 
-The authoritative list. Every variable is read by `server/config.py`
-(`Settings(BaseSettings)`) from the process environment and/or a `.env` file in
-the repository root. Values are case-insensitive names, `.env` keys are
-case-insensitive, and unknown keys are ignored.
+## Frontend variables (capstonefrontend)
 
-Three files/layers exist:
+Everything prefixed `VITE_` is inlined into the client bundle by Vite and is
+therefore PUBLIC. Never place secrets in these variables.
 
-| File/place | Purpose | Committed? |
-|------------|---------|------------|
-| `.env.example` | Safe template of every variable with defaults/examples. Never contains real credentials. | Yes |
-| `.env` | Your local configuration (real local values). git-ignored. | No |
-| Render "Environment" panel | Production secrets injected at runtime. **Do not** store these in the repo. | No |
+| Variable | Required | Default | Behavior |
+| --- | --- | --- | --- |
+| `VITE_API_BASE_URL` | Yes | none | HTTP(S) base URL of the backend REST API. Missing value throws at app start. |
+| `VITE_WS_BASE_URL` | No | derived | WebSocket base URL. When omitted it is derived: `https://` -> `wss://`, `http://` -> `ws://` from the API base URL. |
 
-> Never commit real secrets. Generate a real JWT secret with
-> `python -c "import secrets; print(secrets.token_urlsafe(48))"`.
+The WebSocket endpoint is `${wsBaseUrl}/ws`. Deriving it from the API base URL
+matters in production: without it, a relative `/ws` would resolve against the
+Vercel origin and 404. See `src/config/env.ts`.
 
----
-
-## Application
-
-| Variable | Req. | Purpose | Default | Validation |
-|----------|------|---------|---------|------------|
-| `APP_ENV` | — | Environment: `development` \| `test` \| `production` | `development` | Must be one of the three; `production` triggers fail-fast validation (below) |
-| `DEBUG` | — | Debug behavior flag | `false` | Bool |
-| `HOST` | — | Bind address | `0.0.0.0` | — |
-| `PORT` | — | Bind port | `8000` | Int |
-| `LOG_LEVEL` | — | Python logging level (`DEBUG|INFO|WARNING|ERROR`) | `INFO` | Uppercased by `setup_logging()` |
-
-## MongoDB
-
-| Variable | Req. | Purpose | Default | Validation |
-|----------|------|---------|---------|------------|
-| `MONGODB_URI` | prod | Connection string | `mongodb://localhost:27017` | Production rejects the `USERNAME:PASSWORD` placeholder marker |
-| `MONGODB_DB` | prod | Database name | `secure_messaging` | — |
-| `MONGODB_SERVER_SELECTION_TIMEOUT_MS` | — | Server selection timeout | `5000` | `>= 100` |
-| `MONGODB_CONNECT_TIMEOUT_MS` | — | Connect timeout | `10000` | `>= 100` |
-| `MONGODB_SOCKET_TIMEOUT_MS` | — | Socket timeout; unset = driver default | `None` | `>= 100` or unset |
-| `MONGODB_MAX_POOL_SIZE` | — | Connection pool max | `50` | `>= 1` |
-| `MONGODB_MIN_POOL_SIZE` | — | Connection pool min | `0` | `>= 0` |
-| `MONGODB_MAX_IDLE_TIME_MS` | — | Max idle connection lifetime | `300000` | `>= 0` |
-
-## Redis
-
-| Variable | Req. | Purpose | Default | Validation |
-|----------|------|---------|---------|------------|
-| `REDIS_URL` | prod | Connection URL (`redis://:password@host:6379/0` when auth is on) | `redis://localhost:6379/0` | — |
-| `REDIS_MAX_CONNECTIONS` | — | Client pool size | `10` | `>= 1` |
-| `REDIS_SOCKET_CONNECT_TIMEOUT` | — | Connect timeout (seconds) | `3.0` | `>= 0` |
-| `REDIS_SOCKET_TIMEOUT` | — | Socket timeout (seconds) | `5.0` | `>= 0` |
-| `REDIS_HEALTH_CHECK_INTERVAL` | — | Pool health-check interval | `30` | `>= 1` |
-
-## JWT
-
-| Variable | Req. | Purpose | Default | Validation |
-|----------|------|---------|---------|------------|
-| `JWT_SECRET` | prod | HMAC signing/verification secret | `change-me-in-production-please` | Production: non-empty, `>= 16` chars, not a known placeholder |
-| `JWT_ALGORITHM` | — | Signing algorithm | `HS256` | Must be `HS256`, `HS384`, or `HS512` (in every environment) |
-| `JWT_EXPIRY_HOURS` | — | Token lifetime | `24` | Int |
-| `JWT_ISSUER` | — | Issuer claim, validated on verify | `secure-messaging-api` | Must be non-empty |
-
-## Authentication (proof of possession)
-
-| Variable | Req. | Purpose | Default | Validation |
-|----------|------|---------|---------|------------|
-| `AUTH_CHALLENGE_TTL_SECONDS` | — | Lifetime of a challenge nonce | `120` | `>= 5` |
-
-## WebSocket
-
-| Variable | Req. | Purpose | Default | Validation |
-|----------|------|---------|---------|------------|
-| `WS_AUTH_TIMEOUT_SECONDS` | — | Seconds to send the first (auth) frame | `10.0` | `>= 1` |
-| `WS_MAX_CONNECTIONS` | — | Hard per-process connection budget | `1000` | `>= 1` |
-| `WS_MAX_CONNECTIONS_PER_IP` | — | Per-IP cap (0 disables) | `20` | `>= 0` |
-| `WS_IDLE_TIMEOUT_SECONDS` | — | Max silence after auth before close `4008` (0 disables) | `180.0` | `>= 0` |
-| `WS_KEEPALIVE_SECONDS` | — | Server ping interval; must be < idle timeout (0 disables) | `30.0` | `>= 0` |
-| `WS_PRESENCE_TTL_SECONDS` | — | Lifetime of `online:`/`conn:` Redis markers | `300` | `>= 30` |
-| `WS_CONNECT_RATE_PER_MINUTE` | — | WS connect rate limit (sliding window) | `60` | `>= 1` |
-| `WS_MESSAGE_RATE_PER_MINUTE` | — | WS message rate limit per user | `120` | `>= 1` |
-
-## Security / transport / CORS
-
-| Variable | Req. | Purpose | Default | Validation |
-|----------|------|---------|---------|------------|
-| `CORS_ORIGINS` | prod | Comma-separated allowed origins (browser clients). Unset → `["*"]` (dev only). Empty value (no frontend yet) → `[]`. Explicit `*` → `["*"]` (rejected in production). | `*` (i.e. unset) | Production rejects `["*"]`; accepts a specific list or an explicit empty value |
-| `ALLOWED_HOSTS` | prod | Comma-separated allowed `Host` headers; `*` disables enforcement | `*` | Production rejects a bare `*` |
-| `SECURE_TRANSPORT` | prod | True when served over TLS (HTTPS/WSS); gates the HSTS header | `false` | Production requires `true` |
-
----
-
-## Production fail-fast validation
-
-When `APP_ENV=production`, `Settings._check_production()` **refuses to start**
-unless all of the following hold:
-
-- `JWT_SECRET` is set, at least 16 characters, and **not** one of:
-  - `change-me-in-production-please`
-  - `dev-only-change-me`
-  - `change-me-to-a-long-random-string`
-- `MONGODB_URI` does **not** contain `USERNAME:PASSWORD` (the `.env.example`
-  placeholder)
-- `CORS_ORIGINS` is a specific list, **or** is left explicitly empty (no
-  frontend yet). The literal `*` is rejected. The three operator states are
-  preserved distinctly:
-    - unset (env var absent) → `["*"]`; rejected by the production check;
-    - empty value (`CORS_ORIGINS=`) → `[]` (secure: no browser cross-origin
-      traffic is allowed); **accepted**;
-    - one or more comma-separated origins → kept as-is; **accepted**.
-- `ALLOWED_HOSTS` is a specific list, not `*`
-- `SECURE_TRANSPORT=true`
-
-Example safe production values (also see [DEPLOYMENT.md](DEPLOYMENT.md)):
+Production value used in this project:
 
 ```
-APP_ENV=production
-SECURE_TRANSPORT=true
-ALLOWED_HOSTS=secure-messaging.onrender.com
-CORS_ORIGINS=https://your-client.example.com   # or leave empty if no frontend
-JWT_SECRET=<generated>
+VITE_API_BASE_URL=https://secure-messaging-backend-g7v0.onrender.com
+# VITE_WS_BASE_URL=wss://secure-messaging-backend-g7v0.onrender.com   (derived)
 ```
 
-Failures raise `ValueError` at import time; the process logs the message and
-exits — an incorrectly configured deployment never serves traffic.
+## Backend variables (capstonebackend)
 
-## Local example (`.env.example`)
+All configuration lives in `server/config.py` (Pydantic Settings) and is read
+from environment variables, optionally from a local `.env` file.
 
-`.env.example` shows defaults and inline guidance for every variable above and
-is safe to use as a starting point. Copy it to `.env` and adjust `MONGODB_URI`,
-`REDIS_URL`, and `JWT_SECRET` for your local services (see
-[DEVELOPMENT.md](DEVELOPMENT.md)).
+### Application
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `APP_ENV` | `development` | One of `development`, `test`, `production`. Production enables fail-fast secret validation. |
+| `DEBUG` | `false` | Debug logging/behavior. |
+| `HOST` | `0.0.0.0` | Bind address. |
+| `PORT` | `8000` | HTTP port. |
+| `LOG_LEVEL` | `INFO` | `DEBUG \| INFO \| WARNING \| ERROR`. |
+
+### MongoDB
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `MONGODB_URI` | `mongodb://localhost:27017` | Atlas or local connection string. Production must be a real value (placeholder marker `USERNAME:PASSWORD` is rejected). |
+| `MONGODB_DB` | `secure_messaging` | Database name. |
+| `MONGODB_SERVER_SELECTION_TIMEOUT_MS` | `5000` | Startup connectivity bound. |
+| `MONGODB_CONNECT_TIMEOUT_MS` | `10000` | Connection timeout. |
+| `MONGODB_SOCKET_TIMEOUT_MS` | unset | Optional per-socket timeout. |
+| `MONGODB_MAX_POOL_SIZE` | `50` | Connection pool upper bound. |
+| `MONGODB_MIN_POOL_SIZE` | `0` | Pool lower bound. |
+| `MONGODB_MAX_IDLE_TIME_MS` | `300000` | Max idle time per connection. |
+
+### Redis
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `REDIS_URL` | `redis://localhost:6379/0` | Used for rate limits, challenges, revocation, presence, offline queue. |
+| `REDIS_MAX_CONNECTIONS` | `10` | Pool cap (single reused client). |
+| `REDIS_SOCKET_CONNECT_TIMEOUT` | `3` | Seconds. |
+| `REDIS_SOCKET_TIMEOUT` | `5` | Seconds. |
+| `REDIS_HEALTH_CHECK_INTERVAL` | `30` | Seconds. |
+
+### JWT
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `JWT_SECRET` | dev placeholder | MUST be a strong random value in production; known placeholders are rejected (`change-me-in-production-please`, `dev-only-change-me`, `change-me-to-a-long-random-string`), and length must be >= 16. |
+| `JWT_ALGORITHM` | `HS256` | One of `HS256`, `HS384`, `HS512`; anything else is rejected in every environment. |
+| `JWT_EXPIRY_HOURS` | `24` | Token lifetime. |
+| `JWT_ISSUER` | `secure-messaging-api` | Claim in issued tokens and enforced on verification; must not be empty. |
+
+### Proof of possession
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `AUTH_CHALLENGE_TTL_SECONDS` | `120` | Lifetime of a challenge nonce (min 5). |
+
+### WebSocket
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `WS_AUTH_TIMEOUT_SECONDS` | `10` | Seconds to complete the first-frame auth handshake before close 4001. |
+| `WS_MAX_CONNECTIONS` | `1000` | Per-process concurrent connection budget (reserved pre-auth). |
+| `WS_MAX_CONNECTIONS_PER_IP` | `20` | Per-IP concurrent cap; `0` disables. |
+| `WS_IDLE_TIMEOUT_SECONDS` | `180` | Silent connection close (4008); `0` disables. |
+| `WS_KEEPALIVE_SECONDS` | `30` | Interval between server pings; must be below the idle timeout. |
+| `WS_PRESENCE_TTL_SECONDS` | `300` | Lifetime of `online:` / `conn:` markers (refreshed every half-life). |
+| `WS_CONNECT_RATE_PER_MINUTE` | `60` | Connect attempts per IP per minute. |
+| `WS_MESSAGE_RATE_PER_MINUTE` | `120` | Inbound frames per user per minute. |
+
+### CORS and transport security
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `CORS_ORIGINS` | unset (=> `*`) | Comma-separated origins. Explicit empty = no browser origins. Production rejects `*`. |
+| `ALLOWED_HOSTS` | `*` | Comma-separated acceptable `Host` header values; `*` disables validation. Production rejects `*`. |
+| `SECURE_TRANSPORT` | `false` | Must be `true` in production; gates the HSTS header (never sent over plaintext HTTP). |
+
+## Production validation
+
+With `APP_ENV=production`, startup raises a `ValueError` (fail fast) if any of
+these hold:
+
+- `JWT_SECRET` missing, shorter than 16 chars, or a known placeholder.
+- `MONGODB_URI` contains the `USERNAME:PASSWORD` placeholder.
+- `CORS_ORIGINS` resolves to `*`.
+- `ALLOWED_HOSTS` resolves to `*`.
+- `SECURE_TRANSPORT` is false.
+- `JWT_ALGORITHM` is not in `{HS256, HS384, HS512}` or `JWT_ISSUER` is empty
+  (this check applies in every environment).

@@ -1,0 +1,68 @@
+# Limitations
+
+Honest account of what the capstone does not do, and why.
+
+## E2EE lifecycle
+
+- **Sessions are memory-only.** Ratchet state, skipped-key buffers, and the
+  X3DH root are never persisted. An app restart or reload forces a fresh
+  `session_init`. `export()`/`import()` exist and are tested but are not wired
+  into the app.
+- **No history persistence.** Messages are not stored client- or server-side
+  beyond the offline queue TTL. Reloading clears the viewport (the server
+  still holds ciphertext in `pending:{user_id}` until the peer reconnects).
+- **Export format caveat.** Frontend and backend serialize ratchet/session
+  state with slightly different AD-length packing (`>B 8B…` vs `>B B B I`);
+  the formats are verified per side, but byte-level cross-compatibility is
+  not asserted. Deliberately out of the shipped path.
+
+## Keys and identities
+
+- **No key rotation.** `SPK`/OPK replacement or a re-issue of `ik_public`
+  after compromise is not implemented (only the initial upload).
+- **No recovery.** A lost passphrase is unrecoverable; there is no backup or
+  admin reset by design.
+- **Single device.** One identity per device, one socket per user — a second
+  login replaces the first (`4000 REPLACED`).
+
+## Messaging surface
+
+- **No contact / conversation management.** No search, lists, group chats,
+  or conversation metadata beyond the rendered thread.
+- **Attachments** exist only as a `file` envelope type; there is no upload or
+  blob transport.
+- **Receipts** are emitted but not persisted; the chat UI shows status ticks
+  in-memory only.
+- **Typing indicators** are fire-and-forget; no presence history.
+- **No notifications** (no web push; offline peers are caught by the queue
+  flush on next connect).
+
+## Security posture gaps
+
+- **Metadata is visible** (sender, recipient, timestamps, envelope types,
+  typing) to the server even though payloads are opaque.
+- **Client-side crypto** relies on Web Crypto + `@noble/curves`; audit is
+  manual and pinned dependencies are the only guard against supply-chain
+  compromise.
+- **JWT via HS256** means one shared secret across instances (deployed
+  single-process).
+- **WS rate gates degrade open** on a Redis outage (delivery preserved over
+  strict metering); HTTP paths stay fail-closed.
+- No CSP/`Trusted Types` hardening in the built bundle.
+
+## Deployment constraints
+
+- Single-instance backend; no horizontal scaling or multi-replica sessions.
+- JWT revocation and rate state rely on Redis; losing Redis preserves auth
+  security but stops strict metering for WS.
+- `Vercel`-published frontend has no server-rendered fallback content (pure
+  SPA + rewrite).
+
+## Deliberately excluded for scope
+
+- Mobile/native clients, push, media processing, group E2EE (Sender Keys,
+  MLS), user search, moderation/abuse reporting, admin console, localization,
+  offline-first PWA.
+- Migration of users or data between environments.
+
+These items are the natural "future work" track (see `CAPSTONE_REVIEW.md`).
